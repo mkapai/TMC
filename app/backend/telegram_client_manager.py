@@ -1332,8 +1332,7 @@ class TelegramClientManager:
                         target_chat_id,
                         text or "",
                         link_preview=getattr(rule, 'enable_link_preview', True),
-                        buttons=getattr(original_message, 'reply_markup', None),
-                        entities=getattr(original_message, 'entities', None),
+                        buttons=getattr(original_message, 'reply_markup', None)
                     )
                 else:
                     # 其他媒体：作为文件发送，caption 放入文本，保留按钮
@@ -2602,13 +2601,19 @@ class MultiClientManager:
     def _check_keyword_filter(self, message, rule):
         """检查关键词过滤"""
         try:
-            if not message.text:
-                return True  # 非文本消息跳过关键词检查
-            
-            # 这里可以添加关键词过滤逻辑
-            # 暂时返回True，表示通过过滤
-            return True
-            
+            # 获取消息文本（文本或caption）
+            message_text = getattr(message, 'text', None) or getattr(message, 'message', '') or ''
+            if not message_text:
+                return True  # 没有可匹配文本时不阻断
+
+            from filters import KeywordFilter
+            keywords = getattr(rule, 'keywords', None) or []
+            if not keywords:
+                return True
+
+            keyword_filter = KeywordFilter()
+            return keyword_filter.should_forward(message_text, keywords)
+
         except Exception as e:
             self.logger.error(f"❌ 关键词过滤检查失败: {e}")
             return True

@@ -225,7 +225,13 @@ async def get_rule(rule_id: int):
             
             # 关联数据
             "keywords": [
-                {"word": kw.word, "mode": kw.mode} 
+                {
+                    "id": kw.id,
+                    "rule_id": kw.rule_id,
+                    "keyword": kw.keyword,
+                    "is_blacklist": kw.is_exclude,
+                    "created_at": kw.created_at.isoformat() if kw.created_at else None
+                }
                 for kw in rule.keywords
             ] if rule.keywords else [],
             "replace_rules": [
