@@ -9,6 +9,7 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from log_manager import get_logger
+from pathlib import Path
 
 logger = get_logger('api.settings', 'api.log')
 
@@ -43,6 +44,9 @@ async def get_settings():
             "log_retention_days": getattr(Config, 'LOG_RETENTION_DAYS', '30'),
             "log_cleanup_time": getattr(Config, 'LOG_CLEANUP_TIME', '02:00'),
             "max_log_size": getattr(Config, 'MAX_LOG_SIZE', '100'),
+            "public_base_url": getattr(Config, 'PUBLIC_BASE_URL', ''),
+            "resource_cache_max_gb": getattr(Config, 'RESOURCE_CACHE_MAX_GB', 100),
+            "public_resource_ttl_days": getattr(Config, 'PUBLIC_RESOURCE_TTL_DAYS', 7),
         }
         
         logger.info("✅ 系统设置获取成功")
@@ -83,66 +87,80 @@ async def save_settings(request: Request):
         
         logger.info(f"📝 配置变更: {', '.join(config_changes)}")
         
-        # 构建新的配置内容
-        config_lines = []
-        
-        # Telegram配置
-        config_lines.append("# Telegram API配置")
-        config_lines.append(f"API_ID={data.get('api_id', '')}")
-        config_lines.append(f"API_HASH={data.get('api_hash', '')}")
-        config_lines.append(f"BOT_TOKEN={data.get('bot_token', '')}")
-        config_lines.append(f"PHONE_NUMBER={data.get('phone_number', '')}")
-        config_lines.append(f"ADMIN_USER_IDS={data.get('admin_user_ids', '')}")
-        config_lines.append("")
-        
-        # 代理配置
-        config_lines.append("# 代理配置")
-        enable_proxy = data.get('enable_proxy', False)
-        config_lines.append(f"ENABLE_PROXY={str(enable_proxy).lower()}")
-        
-        # 只有在启用代理时才写入代理参数
-        if enable_proxy:
-            config_lines.append(f"PROXY_TYPE={data.get('proxy_type', 'http')}")
-            config_lines.append(f"PROXY_HOST={data.get('proxy_host', '127.0.0.1')}")
-            config_lines.append(f"PROXY_PORT={data.get('proxy_port', '7890')}")
-            config_lines.append(f"PROXY_USERNAME={data.get('proxy_username', '')}")
-            if data.get('proxy_password') and data.get('proxy_password') != '***':
-                config_lines.append(f"PROXY_PASSWORD={data.get('proxy_password', '')}")
-            logger.info(f"🌐 代理配置已启用: {data.get('proxy_type', 'http')}://{data.get('proxy_host', '127.0.0.1')}:{data.get('proxy_port', '7890')}")
-        else:
-            config_lines.append("# PROXY_TYPE=http")
-            config_lines.append("# PROXY_HOST=127.0.0.1") 
-            config_lines.append("# PROXY_PORT=7890")
-            config_lines.append("# PROXY_USERNAME=")
-            config_lines.append("# PROXY_PASSWORD=")
-            logger.info("🚫 代理配置已禁用")
-        
-        config_lines.append("")
-        
-        # 日志配置
-        config_lines.append("# 日志管理配置")
-        config_lines.append(f"ENABLE_LOG_CLEANUP={str(data.get('enable_log_cleanup', False)).lower()}")
-        config_lines.append(f"LOG_RETENTION_DAYS={data.get('log_retention_days', '30')}")
-        config_lines.append(f"LOG_CLEANUP_TIME={data.get('log_cleanup_time', '02:00')}")
-        config_lines.append(f"MAX_LOG_SIZE={data.get('max_log_size', '100')}")
-        config_lines.append("")
-        
-        logger.info(f"📊 日志清理: {'启用' if data.get('enable_log_cleanup') else '禁用'}, 保留天数: {data.get('log_retention_days', '30')}天")
-        
-        # 写入配置文件（优先使用 config/app.config）
-        import os
-        from pathlib import Path
-        
-        config_content = "\n".join(config_lines)
-        
-        # 确保配置目录存在
-        config_dir = Path('config')
+        if 'public_base_url' in data:
+            public_base_url = str(data.get('public_base_url') or '').strip().rstrip('/')
+            if public_base_url and not public_base_url.lower().startswith(("http://", "https://")):
+                return JSONResponse(
+                    content={"success": False, "message": "公开访问地址必须使用 http:// 或 https://"},
+                    status_code=400,
+                )
+            data['public_base_url'] = public_base_url
+        if 'resource_cache_max_gb' in data:
+            try:
+                if float(data['resource_cache_max_gb']) <= 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                return JSONResponse(
+                    content={"success": False, "message": "缓存容量必须大于 0 GB"},
+                    status_code=400,
+                )
+        if 'public_resource_ttl_days' in data:
+            try:
+                ttl_days = int(data['public_resource_ttl_days'])
+                if ttl_days < 1 or ttl_days > 3650:
+                    raise ValueError
+            except (TypeError, ValueError):
+                return JSONResponse(
+                    content={"success": False, "message": "公开资源有效期必须为 1 至 3650 天"},
+                    status_code=400,
+                )
+            data['public_resource_ttl_days'] = ttl_days
+
+        key_map = {
+            'api_id': 'API_ID', 'api_hash': 'API_HASH', 'bot_token': 'BOT_TOKEN',
+            'phone_number': 'PHONE_NUMBER', 'admin_user_ids': 'ADMIN_USER_IDS',
+            'enable_proxy': 'ENABLE_PROXY', 'proxy_type': 'PROXY_TYPE',
+            'proxy_host': 'PROXY_HOST', 'proxy_port': 'PROXY_PORT',
+            'proxy_username': 'PROXY_USERNAME', 'proxy_password': 'PROXY_PASSWORD',
+            'enable_log_cleanup': 'ENABLE_LOG_CLEANUP',
+            'log_retention_days': 'LOG_RETENTION_DAYS',
+            'log_cleanup_time': 'LOG_CLEANUP_TIME', 'max_log_size': 'MAX_LOG_SIZE',
+            'public_base_url': 'PUBLIC_BASE_URL',
+            'resource_cache_max_gb': 'RESOURCE_CACHE_MAX_GB',
+            'public_resource_ttl_days': 'PUBLIC_RESOURCE_TTL_DAYS',
+        }
+        updates = {}
+        for request_key, config_key in key_map.items():
+            if request_key not in data:
+                continue
+            value = data[request_key]
+            if request_key == 'proxy_password' and value in ('', '***'):
+                continue
+            if isinstance(value, bool):
+                value = str(value).lower()
+            updates[config_key] = str(value)
+
+        from config import PROJECT_ROOT
+
+        config_dir = PROJECT_ROOT / 'config'
         config_dir.mkdir(exist_ok=True)
-        
-        # 写入到 config/app.config（持久化配置文件）
         config_file = config_dir / 'app.config'
-        with open(config_file, 'w', encoding='utf-8') as f:
-            f.write(config_content)
+        lines = config_file.read_text(encoding='utf-8').splitlines() if config_file.exists() else []
+        seen = set()
+        for index, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#') or '=' not in stripped:
+                continue
+            key = stripped.split('=', 1)[0].strip()
+            if key in updates:
+                lines[index] = f"{key}={updates[key]}"
+                seen.add(key)
+        if updates.keys() - seen:
+            if lines and lines[-1]:
+                lines.append('')
+            lines.append('# 消息投递配置')
+            lines.extend(f"{key}={updates[key]}" for key in updates.keys() - seen)
+        config_file.write_text("\n".join(lines) + "\n", encoding='utf-8')
         
         logger.info(f"💾 配置已保存到: {config_file}")
         
@@ -158,7 +176,7 @@ async def save_settings(request: Request):
         logger.info("✅ 系统配置保存成功！代理配置已生效，新启动的客户端将使用新配置")
         
         # 检查是否有代理配置变更
-        proxy_changed = enable_proxy or data.get('proxy_host') or data.get('proxy_port')
+        proxy_changed = any(key in data for key in ('enable_proxy', 'proxy_host', 'proxy_port'))
         
         return JSONResponse(content={
             "success": True,

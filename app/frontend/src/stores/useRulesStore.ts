@@ -162,7 +162,7 @@ export const useRulesStore = create<RulesState>((set, get) => ({
       filtered = filtered.filter(rule =>
         rule.name.toLowerCase().includes(search) ||
         rule.source_chat_name?.toLowerCase().includes(search) ||
-        rule.target_chat_name?.toLowerCase().includes(search)
+        (rule.delivery_targets || []).some(target => target.name.toLowerCase().includes(search))
       );
     }
     
@@ -177,10 +177,6 @@ export const useRulesStore = create<RulesState>((set, get) => ({
     }
     
     // 目标聊天筛选
-    if (filters.target_chat) {
-      filtered = filtered.filter(rule => rule.target_chat_id === filters.target_chat);
-    }
-    
     // 排序
     filtered.sort((a, b) => {
       let aValue: string | number | Date = a[sortBy] as string | number | Date;
@@ -193,7 +189,7 @@ export const useRulesStore = create<RulesState>((set, get) => ({
       }
       
       // 处理字符串类型
-      if (typeof aValue === 'string') {
+      if (typeof aValue === 'string' && typeof bValue === 'string') {
         aValue = aValue.toLowerCase();
         bValue = bValue.toLowerCase();
       }

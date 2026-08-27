@@ -6,6 +6,8 @@ Telegram客户端管理API路由
 管理多个Telegram客户端的添加、删除、启动、停止
 """
 
+import asyncio
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from log_manager import get_logger
@@ -14,6 +16,50 @@ from api.dependencies import get_enhanced_bot
 logger = get_logger('api.clients', 'api.log')
 
 router = APIRouter()
+
+
+async def _load_runtime_client(enhanced_bot, client_id: str):
+    """Load a configured client into the runtime manager without starting it."""
+    if client_id in enhanced_bot.multi_client_manager.clients:
+        return enhanced_bot.multi_client_manager.clients[client_id]
+
+    from config import Config
+    from database import get_db
+    from models import TelegramClient
+    from sqlalchemy import select
+
+    async for db in get_db():
+        result = await db.execute(
+            select(TelegramClient).where(TelegramClient.client_id == client_id)
+        )
+        db_client = result.scalar_one_or_none()
+        if not db_client:
+            return None
+
+        if db_client.client_type == 'bot':
+            config_data = {
+                'bot_token': db_client.bot_token,
+                'admin_user_id': db_client.admin_user_id,
+                'api_id': db_client.api_id,
+                'api_hash': db_client.api_hash,
+            }
+        else:
+            config_data = {
+                'api_id': db_client.api_id or Config.API_ID,
+                'api_hash': db_client.api_hash or Config.API_HASH,
+                'phone': db_client.phone or Config.PHONE_NUMBER,
+            }
+
+        client = enhanced_bot.multi_client_manager.add_client_with_config(
+            db_client.client_id,
+            db_client.client_type,
+            config_data=config_data,
+        )
+        client.add_status_callback(enhanced_bot._notify_status_change)
+        logger.info(f"✅ 从数据库加载客户端配置: {client_id}")
+        return client
+
+    return None
 
 
 @router.get("")
@@ -245,59 +291,16 @@ async def start_client(client_id: str):
                 "message": "增强版客户端管理器不可用"
             }, status_code=400)
         
-        # 【修复】如果客户端不在内存中，先从数据库加载
+        # 如果客户端不在内存中，先从数据库加载
         if client_id not in enhanced_bot.multi_client_manager.clients:
             logger.info(f"客户端 {client_id} 不在内存中，尝试从数据库加载...")
-            
             try:
-                from models import TelegramClient
-                from database import get_db
-                from sqlalchemy import select
-                
-                async for db in get_db():
-                    result = await db.execute(
-                        select(TelegramClient).where(TelegramClient.client_id == client_id)
-                    )
-                    db_client = result.scalar_one_or_none()
-                    
-                    if not db_client:
-                        return JSONResponse(content={
-                            "success": False,
-                            "message": f"客户端 {client_id} 不存在"
-                        }, status_code=404)
-                    
-                    # 准备配置数据
-                    config_data = {}
-                    if db_client.client_type == 'bot':
-                        config_data = {
-                            'bot_token': db_client.bot_token,
-                            'admin_user_id': db_client.admin_user_id,
-                            'api_id': db_client.api_id,
-                            'api_hash': db_client.api_hash
-                        }
-                    elif db_client.client_type == 'user':
-                        from config import Config
-                        config_data = {
-                            'api_id': db_client.api_id or Config.API_ID,
-                            'api_hash': db_client.api_hash or Config.API_HASH,
-                            'phone': db_client.phone or Config.PHONE_NUMBER
-                        }
-                    
-                    # 添加到运行时管理器
-                    client = enhanced_bot.multi_client_manager.add_client_with_config(
-                        db_client.client_id,
-                        db_client.client_type,
-                        config_data=config_data
-                    )
-                    
-                    # 注册状态回调
-                    client.add_status_callback(
-                        lambda status, data, cid=client_id: enhanced_bot._notify_status_change(cid, status, data or {})
-                    )
-                    
-                    logger.info(f"✅ 从数据库加载客户端配置: {client_id}")
-                    break
-                    
+                client = await _load_runtime_client(enhanced_bot, client_id)
+                if not client:
+                    return JSONResponse(content={
+                        "success": False,
+                        "message": f"客户端 {client_id} 不存在"
+                    }, status_code=404)
             except Exception as load_error:
                 logger.error(f"从数据库加载客户端失败: {load_error}")
                 return JSONResponse(content={
@@ -305,6 +308,11 @@ async def start_client(client_id: str):
                     "message": f"加载客户端配置失败: {str(load_error)}"
                 }, status_code=500)
         
+        # 启动前关闭未完成的临时登录连接，避免两个事件循环争用 session。
+        client = enhanced_bot.multi_client_manager.get_client(client_id)
+        if client and client.login_state in {'waiting_code', 'waiting_password'}:
+            await client._reset_login_state()
+
         # 启动客户端
         success = enhanced_bot.multi_client_manager.start_client(client_id)
         if success:
@@ -550,48 +558,54 @@ async def login_client(client_id: str, request: Request):
                 "message": "增强版客户端管理器不可用"
             }, status_code=400)
         
-        # 获取客户端
-        if client_id not in enhanced_bot.multi_client_manager.clients:
+        # 重启后未自动启动的客户端也必须能直接进入登录流程。
+        client_wrapper = await _load_runtime_client(enhanced_bot, client_id)
+        if not client_wrapper:
             return JSONResponse(content={
                 "success": False,
                 "message": f"客户端 {client_id} 不存在"
             }, status_code=404)
         
-        client_wrapper = enhanced_bot.multi_client_manager.clients[client_id]
-        
-        # 处理不同的登录步骤
-        if step == 'send_code':
-            # 发送验证码
-            result = await client_wrapper.send_verification_code()
-            return JSONResponse(content=result)
-        
-        elif step == 'submit_code':
-            # 提交验证码
-            if not code:
-                return JSONResponse(content={
-                    "success": False,
-                    "message": "请提供验证码"
-                }, status_code=400)
-            
-            result = await client_wrapper.submit_verification_code(code)
-            return JSONResponse(content=result)
-        
-        elif step == 'submit_password':
-            # 提交二步验证密码
-            if not password:
-                return JSONResponse(content={
-                    "success": False,
-                    "message": "请提供密码"
-                }, status_code=400)
-            
-            result = await client_wrapper.submit_password(password)
-            return JSONResponse(content=result)
-        
-        else:
+        try:
+            await asyncio.wait_for(client_wrapper.login_lock.acquire(), timeout=0.1)
+        except asyncio.TimeoutError:
+            return JSONResponse(content={
+                "success": False,
+                "message": "登录操作正在进行，请勿重复提交",
+                "error_type": "login_in_progress",
+            }, status_code=409)
+
+        try:
+            if step == 'send_code':
+                result = await client_wrapper.send_verification_code()
+                return JSONResponse(content=result)
+
+            if step == 'submit_code':
+                if not code:
+                    return JSONResponse(content={
+                        "success": False,
+                        "message": "请提供验证码"
+                    }, status_code=400)
+
+                result = await client_wrapper.submit_verification_code(code)
+                return JSONResponse(content=result)
+
+            if step == 'submit_password':
+                if not password:
+                    return JSONResponse(content={
+                        "success": False,
+                        "message": "请提供密码"
+                    }, status_code=400)
+
+                result = await client_wrapper.submit_password(password)
+                return JSONResponse(content=result)
+
             return JSONResponse(content={
                 "success": False,
                 "message": "无效的登录步骤"
             }, status_code=400)
+        finally:
+            client_wrapper.login_lock.release()
         
     except Exception as e:
         logger.error(f"客户端登录失败: {e}")

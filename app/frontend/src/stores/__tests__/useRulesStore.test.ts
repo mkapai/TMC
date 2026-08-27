@@ -22,11 +22,13 @@ describe('useRulesStore', () => {
         id: 1,
         name: 'Test Rule',
         source_chat_id: '123',
-        target_chat_id: '456',
+        delivery_mode: 'auto',
+        destination_ids: [],
+        delivery_targets: [],
         is_active: true,
         created_at: '2025-01-01',
         updated_at: '2025-01-01',
-      } as ForwardRule,
+      } as unknown as ForwardRule,
     ]
 
     act(() => {
@@ -60,20 +62,24 @@ describe('useRulesStore', () => {
         id: 1,
         name: 'Test Rule 1',
         source_chat_id: '123',
-        target_chat_id: '456',
+        delivery_mode: 'auto',
+        destination_ids: [],
+        delivery_targets: [],
         is_active: true,
         created_at: '2025-01-01',
         updated_at: '2025-01-01',
-      } as ForwardRule,
+      } as unknown as ForwardRule,
       {
         id: 2,
         name: 'Another Rule',
         source_chat_id: '789',
-        target_chat_id: '012',
+        delivery_mode: 'manual',
+        destination_ids: [],
+        delivery_targets: [],
         is_active: false,
         created_at: '2025-01-02',
         updated_at: '2025-01-02',
-      } as ForwardRule,
+      } as unknown as ForwardRule,
     ]
 
     act(() => {
@@ -118,4 +124,3 @@ describe('useRulesStore', () => {
     expect(stats.withReplacements).toBe(1)
   })
 })
-

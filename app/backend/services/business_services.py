@@ -14,7 +14,7 @@ from functools import lru_cache
 import time
 
 from database import get_db
-from models import ForwardRule, Keyword, ReplaceRule, MessageLog, UserSession, BotSettings
+from models import DeliveryTarget, ForwardRule, Keyword, ReplaceRule, UserSession, BotSettings, rule_delivery_targets
 from filters import KeywordFilter, RegexReplacer, MessageProcessor
 from timezone_utils import get_user_now
 
@@ -55,8 +55,6 @@ class ForwardRuleService:
         name: str,
         source_chat_id: str,
         source_chat_name: str,
-        target_chat_id: str,
-        target_chat_name: str,
         **kwargs
     ) -> ForwardRule:
         """创建转发规则"""
@@ -83,15 +81,24 @@ class ForwardRuleService:
                         # 移除无效的时间字段
                         kwargs.pop(time_field, None)
         
+        destination_ids = kwargs.pop('destination_ids', [])
         async for db in get_db():
             rule = ForwardRule(
                 name=name,
                 source_chat_id=source_chat_id,
                 source_chat_name=source_chat_name,
-                target_chat_id=target_chat_id,
-                target_chat_name=target_chat_name,
                 **kwargs
             )
+            if destination_ids:
+                rule.delivery_targets = list((await db.scalars(
+                    select(DeliveryTarget).where(
+                        DeliveryTarget.id.in_(destination_ids),
+                        DeliveryTarget.is_active.is_(True),
+                        DeliveryTarget.is_deleted.is_(False),
+                    )
+                )).all())
+            if not rule.delivery_targets:
+                raise ValueError("至少选择一个可用的发送目标")
             
             db.add(rule)
             await db.commit()
@@ -106,7 +113,8 @@ class ForwardRuleService:
         async for db in get_db():
             stmt = select(ForwardRule).where(ForwardRule.id == rule_id).options(
                 selectinload(ForwardRule.keywords),
-                selectinload(ForwardRule.replace_rules)
+                selectinload(ForwardRule.replace_rules),
+                selectinload(ForwardRule.delivery_targets),
             )
             result = await db.execute(stmt)
             return result.scalar_one_or_none()
@@ -124,7 +132,8 @@ class ForwardRuleService:
                 )
             ).options(
                 joinedload(ForwardRule.keywords),
-                joinedload(ForwardRule.replace_rules)
+                joinedload(ForwardRule.replace_rules),
+                joinedload(ForwardRule.delivery_targets),
             ).order_by(ForwardRule.id)  # 添加排序确保结果稳定
             
             result = await db.execute(stmt)
@@ -139,7 +148,8 @@ class ForwardRuleService:
         async for db in get_db():
             stmt = select(ForwardRule).options(
                 joinedload(ForwardRule.keywords),
-                joinedload(ForwardRule.replace_rules)
+                joinedload(ForwardRule.replace_rules),
+                joinedload(ForwardRule.delivery_targets),
             ).order_by(ForwardRule.created_at.desc())  # 按创建时间倒序
             
             result = await db.execute(stmt)
@@ -154,7 +164,8 @@ class ForwardRuleService:
         async for db in get_db():
             stmt = select(ForwardRule).where(ForwardRule.is_active == True).options(
                 selectinload(ForwardRule.keywords),
-                selectinload(ForwardRule.replace_rules)
+                selectinload(ForwardRule.replace_rules),
+                selectinload(ForwardRule.delivery_targets),
             )
             result = await db.execute(stmt)
             return result.scalars().all()
@@ -187,6 +198,8 @@ class ForwardRuleService:
                             # 移除无效的时间字段
                             kwargs.pop(time_field, None)
             
+            destination_ids = kwargs.pop('destination_ids', None)
+
             # 添加更新时间
             kwargs['updated_at'] = get_user_now()
             
@@ -196,6 +209,25 @@ class ForwardRuleService:
             
             async with db_manager.async_session() as db:
                 try:
+                    if destination_ids is not None:
+                        rule_result = await db.execute(
+                            select(ForwardRule)
+                            .where(ForwardRule.id == rule_id)
+                            .options(selectinload(ForwardRule.delivery_targets))
+                        )
+                        rule = rule_result.scalar_one_or_none()
+                        if not rule:
+                            return False
+                        rule.delivery_targets = list((await db.scalars(
+                            select(DeliveryTarget).where(
+                                DeliveryTarget.id.in_(destination_ids or [-1]),
+                                DeliveryTarget.is_active.is_(True),
+                                DeliveryTarget.is_deleted.is_(False),
+                            )
+                        )).all())
+                        if not rule.delivery_targets:
+                            raise ValueError("至少选择一个可用的发送目标")
+
                     # 更新前查询当前值
                     before_stmt = select(ForwardRule.is_active).where(ForwardRule.id == rule_id)
                     before_result = await db.execute(before_stmt)
@@ -254,6 +286,14 @@ class ForwardRuleService:
                         logger.warning(f"⚠️ 规则不存在: rule_id={rule_id}")
                         return False
                     
+                    # SQLite does not enforce ON DELETE CASCADE unless the
+                    # connection explicitly enables foreign keys.
+                    await db.execute(
+                        delete(rule_delivery_targets).where(
+                            rule_delivery_targets.c.rule_id == rule_id
+                        )
+                    )
+
                     # 删除规则
                     stmt = delete(ForwardRule).where(ForwardRule.id == rule_id)
                     result = await db.execute(stmt)
@@ -308,8 +348,7 @@ class ForwardRuleService:
                     name=f"{source_rule.name}_copy",
                     source_chat_id=source_rule.source_chat_id,
                     source_chat_name=source_rule.source_chat_name,
-                    target_chat_id=source_rule.target_chat_id,
-                    target_chat_name=source_rule.target_chat_name,
+                    delivery_mode=source_rule.delivery_mode,
                     enable_keyword_filter=source_rule.enable_keyword_filter,
                     enable_regex_replace=source_rule.enable_regex_replace,
                     enable_media=source_rule.enable_media,
@@ -317,6 +356,11 @@ class ForwardRuleService:
                     max_message_length=source_rule.max_message_length,
                     enable_link_preview=source_rule.enable_link_preview
                 )
+                target_ids = [target.id for target in source_rule.delivery_targets]
+                if target_ids:
+                    new_rule.delivery_targets = list((await db.scalars(
+                        select(DeliveryTarget).where(DeliveryTarget.id.in_(target_ids))
+                    )).all())
                 
                 db.add(new_rule)
                 await db.commit()
@@ -475,75 +519,6 @@ class ReplaceRuleService:
             logger.info(f"复制 {count} 个替换规则从规则 {source_rule_id} 到 {target_rule_id}")
             return count
 
-class MessageLogService:
-    """消息日志服务 - 优化版"""
-    
-    @staticmethod
-    async def log_message(rule_id: Optional[int], source_chat_id: str, source_message_id: int,
-                         target_chat_id: str, target_message_id: Optional[int] = None,
-                         original_text: str = "", processed_text: str = "",
-                         status: str = "success", error_message: str = "",
-                         processing_time: int = 0, media_type: str = "") -> MessageLog:
-        """记录消息日志"""
-        async for db in get_db():
-            log = MessageLog(
-                rule_id=rule_id,
-                source_chat_id=source_chat_id,
-                source_message_id=source_message_id,
-                target_chat_id=target_chat_id,
-                target_message_id=target_message_id,
-                original_text=original_text,
-                processed_text=processed_text,
-                status=status,
-                error_message=error_message,
-                processing_time=processing_time,
-                media_type=media_type
-            )
-            
-            db.add(log)
-            await db.commit()
-            await db.refresh(log)
-            
-            return log
-    
-    @staticmethod
-    async def log_messages_batch(logs_data: List[Dict[str, Any]]) -> int:
-        """批量记录消息日志 - 性能优化"""
-        if not logs_data:
-            return 0
-            
-        async for db in get_db():
-            # 批量插入优化
-            logs = [MessageLog(**log_data) for log_data in logs_data]
-            db.add_all(logs)
-            await db.commit()
-            
-            logger.debug(f"批量记录 {len(logs)} 条日志")
-            return len(logs)
-    
-    @staticmethod
-    async def get_logs_by_rule(rule_id: int, limit: int = 100) -> List[MessageLog]:
-        """获取规则的消息日志"""
-        async for db in get_db():
-            stmt = select(MessageLog).where(
-                MessageLog.rule_id == rule_id
-            ).order_by(desc(MessageLog.created_at)).limit(limit)
-            result = await db.execute(stmt)
-            return result.scalars().all()
-    
-    @staticmethod
-    async def clean_old_logs(days: int = 30) -> int:
-        """清理旧日志"""
-        cutoff_date = get_local_now() - timedelta(days=days)
-        
-        async for db in get_db():
-            stmt = delete(MessageLog).where(MessageLog.created_at < cutoff_date)
-            result = await db.execute(stmt)
-            await db.commit()
-            
-            logger.info(f"清理了 {result.rowcount} 条旧日志")
-            return result.rowcount
-
 class UserSessionService:
     """用户会话服务"""
     
@@ -656,148 +631,3 @@ class MessageProcessingService:
         except Exception as e:
             logger.error(f"消息处理失败: {e}")
             return None
-
-
-class HistoryMessageService:
-    """历史消息处理服务"""
-    
-    @staticmethod
-    async def process_history_messages_for_rule(rule: ForwardRule, client_manager) -> Dict[str, Any]:
-        """为规则处理历史消息"""
-        try:
-            from datetime import datetime, timedelta
-            
-            logger.info(f"🔄 开始为规则 '{rule.name}' 处理历史消息...")
-            
-            # 获取客户端
-            if not client_manager or not hasattr(client_manager, 'clients'):
-                return {
-                    "success": False,
-                    "message": "客户端管理器不可用",
-                    "processed": 0,
-                    "forwarded": 0,
-                    "errors": 0
-                }
-            
-            # 根据规则选择客户端
-            client_wrapper = client_manager.clients.get(rule.client_id)
-            if not client_wrapper or not client_wrapper.connected:
-                return {
-                    "success": False,
-                    "message": f"客户端 {rule.client_id} 不可用或未连接",
-                    "processed": 0,
-                    "forwarded": 0,
-                    "errors": 0
-                }
-            
-            # 确定时间范围（最近24小时）
-            from models import get_local_now
-            now = get_local_now()
-            time_filter = {
-                'offset_date': now,
-                'limit': 100,
-                'start_time': now - timedelta(hours=24),
-                'end_time': now
-            }
-            
-            # 获取历史消息
-            try:
-                messages = await HistoryMessageService._fetch_history_messages(
-                    client_wrapper, rule.source_chat_id, time_filter
-                )
-                
-                if not messages:
-                    return {
-                        "success": True,
-                        "message": "没有找到符合条件的历史消息",
-                        "processed": 0,
-                        "forwarded": 0,
-                        "errors": 0
-                    }
-                
-                logger.info(f"📨 找到 {len(messages)} 条历史消息，开始处理...")
-                
-                # 简单的处理逻辑，直接返回成功（避免复杂的转发逻辑）
-                return {
-                    "success": True,
-                    "message": f"历史消息处理完成，找到 {len(messages)} 条消息",
-                    "processed": len(messages),
-                    "forwarded": 0,  # 暂时不实际转发
-                    "errors": 0
-                }
-                
-            except Exception as e:
-                logger.error(f"❌ 获取历史消息失败: {e}")
-                return {
-                    "success": False,
-                    "message": f"获取历史消息失败: {str(e)}",
-                    "processed": 0,
-                    "forwarded": 0,
-                    "errors": 1
-                }
-                
-        except Exception as e:
-            logger.error(f"❌ 历史消息处理失败: {e}")
-            return {
-                "success": False,
-                "message": f"历史消息处理失败: {str(e)}",
-                "processed": 0,
-                "forwarded": 0,
-                "errors": 1
-            }
-    
-    @staticmethod
-    async def _fetch_history_messages(client_wrapper, source_chat_id: str, time_filter: Dict[str, Any]) -> List:
-        """获取历史消息"""
-        try:
-            if not client_wrapper.client or not client_wrapper.client.is_connected():
-                raise Exception("客户端未连接")
-            
-            # 转换聊天ID
-            try:
-                chat_id = int(source_chat_id)
-            except ValueError:
-                # 如果不是数字，可能是用户名
-                chat_id = source_chat_id
-            
-            # 获取聊天实体
-            try:
-                chat_entity = await client_wrapper.client.get_entity(chat_id)
-            except Exception as e:
-                logger.error(f"❌ 无法获取聊天实体 {chat_id}: {e}")
-                raise Exception(f"无法访问源聊天 {chat_id}")
-            
-            # 构建获取消息的参数
-            kwargs = {
-                'entity': chat_entity,
-                'limit': time_filter.get('limit', 100)
-            }
-            
-            if 'offset_date' in time_filter:
-                kwargs['offset_date'] = time_filter['offset_date']
-            
-            # 获取消息 - 限制内存使用
-            messages = []
-            count = 0
-            max_messages = min(time_filter.get('limit', 100), 50)  # 硬限制最多50条消息
-            
-            async for message in client_wrapper.client.iter_messages(**kwargs):
-                # 应用时间过滤
-                if 'start_time' in time_filter and 'end_time' in time_filter:
-                    if not (time_filter['start_time'] <= message.date <= time_filter['end_time']):
-                        continue
-                
-                messages.append(message)
-                count += 1
-                
-                # 防止内存溢出
-                if count >= max_messages:
-                    logger.warning(f"⚠️ 达到消息数量限制 {max_messages}，停止获取更多消息")
-                    break
-            
-            logger.info(f"📥 从聊天 {chat_id} 获取到 {len(messages)} 条历史消息")
-            return messages
-            
-        except Exception as e:
-            logger.error(f"❌ 获取历史消息失败: {e}")
-            raise

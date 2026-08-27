@@ -13,8 +13,6 @@ from telegram_client_manager import MultiClientManager, multi_client_manager
 from config import Config, validate_config
 from database import init_database
 from utils import setup_logging
-from services.media_monitor_service import get_media_monitor_service
-from services.storage_manager import get_storage_manager
 
 class EnhancedTelegramBot:
     """
@@ -36,11 +34,6 @@ class EnhancedTelegramBot:
         # 状态回调
         self.status_callbacks = []
         
-        # 媒体监控服务
-        self.media_monitor = get_media_monitor_service()
-        
-        # 存储管理服务
-        self.storage_manager = get_storage_manager()
         
     def add_status_callback(self, callback):
         """添加状态变化回调"""
@@ -213,17 +206,6 @@ class EnhancedTelegramBot:
             # 不再无条件启动客户端，避免绕过auto_start设置
             self.logger.info("✅ 客户端启动已由自动启动逻辑控制")
             
-            # 处理已激活规则的历史消息（与规则激活时的逻辑一致）
-            await self._process_active_rules_history()
-            
-            # 启动媒体监控服务
-            await self.media_monitor.start()
-            self.logger.info("✅ 媒体监控服务启动完成")
-            
-            # 启动存储管理服务
-            await self.storage_manager.start(check_interval=3600)  # 每小时检查一次
-            self.logger.info("✅ 存储管理服务启动完成")
-            
             self.running = True
             
             if web_mode:
@@ -242,14 +224,6 @@ class EnhancedTelegramBot:
         self.logger.info("🛑 停止机器人...")
         
         self.running = False
-        
-        # 停止媒体监控服务
-        await self.media_monitor.stop()
-        self.logger.info("✅ 媒体监控服务已停止")
-        
-        # 停止存储管理服务
-        await self.storage_manager.stop()
-        self.logger.info("✅ 存储管理服务已停止")
         
         # 停止所有客户端
         self.multi_client_manager.stop_all()
@@ -320,79 +294,6 @@ class EnhancedTelegramBot:
         # 这里可以实现获取聊天列表的逻辑
         return []
     
-    async def _process_active_rules_history(self):
-        """系统启动时处理所有已激活规则的历史消息"""
-        try:
-            from services.business_services import ForwardRuleService
-            
-            self.logger.info("🔄 检查已激活的规则以处理历史消息...")
-            
-            # 获取所有激活的规则
-            active_rules = await ForwardRuleService.get_all_active_rules()
-            
-            if not active_rules:
-                self.logger.info("📝 没有激活的规则，跳过历史消息处理")
-                return
-            
-            self.logger.info(f"📋 发现 {len(active_rules)} 个激活的规则，开始处理历史消息...")
-            
-            # 对每个激活的规则处理历史消息
-            for rule in active_rules:
-                try:
-                    self.logger.info(f"🔄 处理规则 '{rule.name}' (ID: {rule.id}) 的历史消息...")
-                    await self.forward_history_messages(rule.id, hours=24)
-                except Exception as e:
-                    self.logger.error(f"❌ 规则 {rule.id} 历史消息处理失败: {e}")
-                    # 继续处理下一个规则
-            
-            self.logger.info("✅ 所有激活规则的历史消息处理完成")
-            
-        except Exception as e:
-            self.logger.error(f"❌ 处理激活规则历史消息失败: {e}")
-            # 不抛出异常，避免影响系统启动
-    
-    async def forward_history_messages(self, rule_id: int, hours: int = 24):
-        """转发历史消息（当规则从关闭状态激活时或系统启动时）"""
-        try:
-            from services.business_services import ForwardRuleService
-            
-            # 获取规则信息
-            rule = await ForwardRuleService.get_rule_by_id(rule_id)
-            if not rule:
-                self.logger.warning(f"规则 {rule_id} 不存在，跳过历史消息转发")
-                return
-            
-            if not rule.is_active:
-                self.logger.warning(f"规则 {rule_id} 未激活，跳过历史消息转发")
-                return
-            
-            self.logger.info(f"📨 规则 '{rule.name}' (ID: {rule_id}) 开始处理历史消息...")
-            
-            # 使用多客户端管理器的历史消息处理方法
-            if hasattr(self.multi_client_manager, 'process_history_messages'):
-                result = self.multi_client_manager.process_history_messages(rule)
-                if result and result.get('success'):
-                    # 显示详细的处理统计
-                    total_fetched = result.get('total_fetched', 0)
-                    forwarded = result.get('forwarded', 0)
-                    skipped = result.get('skipped', 0) 
-                    errors = result.get('errors', 0)
-                    
-                    self.logger.info(f"✅ 规则 '{rule.name}' (ID: {rule_id}) 历史消息处理完成:")
-                    self.logger.info(f"   📥 获取: {total_fetched} 条")
-                    self.logger.info(f"   ✅ 转发: {forwarded} 条")
-                    self.logger.info(f"   ⏭️ 跳过: {skipped} 条")
-                    self.logger.info(f"   ❌ 错误: {errors} 条")
-                else:
-                    self.logger.warning(f"⚠️ 规则 '{rule.name}' (ID: {rule_id}) 历史消息处理失败: {result.get('message', 'Unknown error') if result else 'No result'}")
-            else:
-                self.logger.warning(f"多客户端管理器不支持历史消息处理")
-            
-        except Exception as e:
-            self.logger.error(f"❌ 规则 {rule_id} 转发历史消息失败: {e}")
-            # 不抛出异常，避免影响其他规则的处理
-
-
 async def main():
     """主函数"""
     bot = EnhancedTelegramBot()

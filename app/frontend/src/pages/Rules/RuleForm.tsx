@@ -26,8 +26,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { rulesApi } from '../../services/rules';
 import { chatsApi } from '../../services/chats';
 import { clientsApi } from '../../services/clients';
+import { deliveryTargetsApi } from '../../services/deliveryTargets';
 import type { CreateRuleDto, UpdateRuleDto } from '../../types/rule';
 import type { ApiError } from '../../types/client';
+import { buildRuleDeliveryFields } from './deliveryFields';
 // z-index问题已在 styles/components/modal.css 中解决
 
 const { Title } = Typography;
@@ -53,6 +55,11 @@ const RuleForm: React.FC = () => {
   const { data: clientsData } = useQuery({
     queryKey: ['clients'],
     queryFn: clientsApi.getClients
+  });
+
+  const { data: deliveryTargets = [] } = useQuery({
+    queryKey: ['delivery-targets'],
+    queryFn: deliveryTargetsApi.list,
   });
 
   // 获取规则详情（编辑模式）
@@ -108,7 +115,8 @@ const RuleForm: React.FC = () => {
       form.setFieldsValue({
         name: ruleData.name,
         source_chat_id: ruleData.source_chat_id,
-        target_chat_id: ruleData.target_chat_id,
+        delivery_mode: ruleData.delivery_mode,
+        destination_ids: ruleData.destination_ids,
         enable_keyword_filter: ruleData.enable_keyword_filter,
         enable_regex_replace: ruleData.enable_regex_replace,
         forward_delay: ruleData.forward_delay,
@@ -157,27 +165,13 @@ const RuleForm: React.FC = () => {
     try {
       // 从聊天列表中查找对应的聊天名称 (处理字符串和数字类型匹配)
       const sourceChat = chats.find(chat => String(chat.id) === String(values.source_chat_id));
-      const targetChat = chats.find(chat => String(chat.id) === String(values.target_chat_id));
-      
       const sourceChatName = sourceChat ? (sourceChat.title || sourceChat.id) : '';
-      const targetChatName = targetChat ? (targetChat.title || targetChat.id) : '';
-
-      console.log('🔍 创建规则 - 聊天信息:', {
-        source_chat_id: values.source_chat_id,
-        target_chat_id: values.target_chat_id,
-        sourceChat,
-        targetChat,
-        sourceChatName,
-        targetChatName,
-        totalChats: chats.length
-      });
 
       const ruleData = {
         name: values.name,
         source_chat_id: values.source_chat_id,
         source_chat_name: sourceChatName,
-        target_chat_id: values.target_chat_id,
-        target_chat_name: targetChatName,
+        ...buildRuleDeliveryFields(values),
         
         // 功能开关
         enable_keyword_filter: values.enable_keyword_filter || false,
@@ -286,6 +280,8 @@ const RuleForm: React.FC = () => {
           forward_delay: 0,
           client_id: 'main_user',
           client_type: 'user',
+          delivery_mode: 'auto',
+          destination_ids: [],
           time_filter_type: 'after_start',
           // 新功能默认值
           enable_deduplication: false,
@@ -337,29 +333,30 @@ const RuleForm: React.FC = () => {
           </Col>
           <Col span={12}>
             <Form.Item
-              label="目标聊天"
-              name="target_chat_id"
-              rules={[{ required: true, message: '请选择或输入目标聊天ID' }]}
+              label="发送模式"
+              name="delivery_mode"
+              rules={[{ required: true, message: '请选择发送模式' }]}
             >
-              <Select
-                showSearch
-                placeholder="选择目标聊天或输入聊天ID"
-                allowClear
-                dropdownStyle={{ zIndex: 1051 }}
-                getPopupContainer={(triggerNode) => triggerNode.parentNode as HTMLElement}
-                filterOption={(input, option) =>
-                  String(option?.children || '').toLowerCase().includes(input.toLowerCase())
-                }
-              >
-                {chats.map(chat => (
-                  <Option key={chat.id} value={chat.id}>
-                    {chat.title || chat.first_name || chat.name} ({chat.id})
-                  </Option>
-                ))}
-              </Select>
+              <Select options={[{ value: 'auto', label: '自动发送' }, { value: 'manual', label: '人工审核' }]} />
             </Form.Item>
           </Col>
         </Row>
+
+        <Form.Item
+          label="发送目标"
+          name="destination_ids"
+          rules={[{ required: true, type: 'array', min: 1, message: '至少选择一个发送目标' }]}
+        >
+          <Select
+            mode="multiple"
+            placeholder="选择一个或多个 Telegram / Webhook 目标"
+            optionFilterProp="label"
+            options={deliveryTargets.filter(target => target.is_active || ruleData?.destination_ids.includes(target.id)).map(target => ({
+              value: target.id,
+              label: `${target.name} (${target.target_type})`,
+            }))}
+          />
+        </Form.Item>
 
         <Divider orientation="left">客户端选择</Divider>
         
@@ -508,7 +505,7 @@ const RuleForm: React.FC = () => {
                   <div><strong>时间过滤规则详解：</strong></div>
                   <div style={{ marginTop: '8px' }}>
                     <div><strong>1. 仅转发启动后的消息</strong>：从启动或开启转发功能的那一刻起，只转发之后产生的新消息</div>
-                    <div><strong>2. 转发所有消息(包括历史)</strong>：无视时间限制，转发该聊天窗口内所有能获取到的消息</div>
+                    <div><strong>2. 不限制时间</strong>：对收到的实时消息不增加时间条件</div>
                     <div><strong>3. 仅转发当天消息</strong>：以自然日(0点-24点)为标准，只转发当天的消息</div>
                     <div><strong>4. 从指定时间开始</strong>：从自定义的具体日期时间点开始转发消息</div>
                     <div><strong>5. 指定时间段内</strong>：只转发在设定的时间段内发送的消息</div>
@@ -518,7 +515,7 @@ const RuleForm: React.FC = () => {
             >
               <Select>
                 <Option value="after_start">仅转发启动后的消息</Option>
-                <Option value="all_messages">转发所有消息(包括历史)</Option>
+                <Option value="all_messages">实时消息不限制时间</Option>
                 <Option value="today_only">仅转发当天消息</Option>
                 <Option value="from_time">从指定时间开始</Option>
                 <Option value="time_range">指定时间段内</Option>

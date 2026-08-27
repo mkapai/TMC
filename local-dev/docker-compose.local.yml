@@ -31,11 +31,6 @@ services:
       - ../data:/app/data
       - ../sessions:/app/sessions
       - tmc-logs:/app/logs
-      # 媒体管理相关目录（v1.3.0 新增）
-      - ../media/downloads:/app/media/downloads
-      - ../media/storage:/app/media/storage
-      # CloudDrive 和外部挂载目录（可选）
-      - tmc-mnt:/mnt
     environment:
       # Telegram 客户端配置（完全可选，推荐通过 Web 界面配置）
       - API_ID=${API_ID:-}
@@ -60,10 +55,6 @@ services:
 volumes:
   tmc-logs:
     driver: local
-  tmc-mnt:
-    driver: local
-
 networks:
   tmc-network:
     driver: bridge
-

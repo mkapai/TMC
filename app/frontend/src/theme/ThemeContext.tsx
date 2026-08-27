@@ -11,7 +11,6 @@ interface ThemeContextType {
   colors: ThemeColors;
   toggleTheme: (event?: React.MouseEvent) => void;
   setTheme: (type: ThemeType) => void;
-  themeVersion: number; // 主题版本号，用于强制组件重新渲染
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
@@ -32,8 +31,6 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     }
   });
   
-  const [themeVersion, setThemeVersion] = useState(0);
-
   const colors = themes[themeType];
 
   useEffect(() => {
@@ -102,7 +99,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   };
 
   return (
-    <ThemeContext.Provider value={{ themeType, colors, toggleTheme, setTheme, themeVersion }}>
+    <ThemeContext.Provider value={{ themeType, colors, toggleTheme, setTheme }}>
       {children}
     </ThemeContext.Provider>
   );
@@ -115,4 +112,3 @@ export const useThemeContext = () => {
   }
   return context;
 };
-

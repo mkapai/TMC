@@ -13,7 +13,10 @@ import os
 from pathlib import Path
 
 # 导入API路由
-from api.routes import system, rules, logs, chats, clients, settings, dashboard, auth, users, media_monitor, media_files, media_settings, pan115, clouddrive2_settings, resource_monitor, performance, notifications, upload_progress, upload_websocket
+from api.routes import (
+    auth, chats, clients, dashboard, delivery_targets, messages,
+    public_resources, rules, settings, system, users,
+)
 
 # 导入核心业务逻辑
 from enhanced_bot import EnhancedTelegramBot
@@ -52,36 +55,20 @@ async def lifespan(app: FastAPI):
             from services.migration_manager import check_and_migrate
             migration_success = check_and_migrate(auto_migrate=True, backup_first=True)
             if not migration_success:
-                logger.warning("⚠️ 数据库迁移未完全成功，但将继续启动")
+                raise RuntimeError("数据库迁移失败，应用拒绝使用不兼容的数据库结构启动")
         
         # 初始化数据库
         await init_database()
         logger.info("✅ 数据库初始化完成")
         
-        # 初始化性能优化组件
-        logger.info("🔧 初始化性能优化组件...")
-        from services.common.message_cache import init_message_cache
-        from services.common.retry_queue import init_retry_queue
-        from services.common.batch_writer import init_batch_writer
-        from services.resource_monitor_service import register_retry_handlers
-        
-        await init_message_cache()
-        logger.info("✅ 消息缓存管理器已启动")
-        
-        await init_retry_queue()
-        logger.info("✅ 智能重试队列已启动")
-        
-        await init_batch_writer()
-        logger.info("✅ 批量数据库写入器已启动")
-        
-        # 注册重试处理器
-        register_retry_handlers()
-        logger.info("✅ 重试处理器已注册")
-        
         # 初始化EnhancedBot
         enhanced_bot_instance = EnhancedTelegramBot()
         await enhanced_bot_instance.start(web_mode=True, skip_config_validation=True)
         logger.info("✅ EnhancedBot启动完成")
+
+        from services.delivery_worker import get_delivery_worker
+        await get_delivery_worker().start()
+        logger.info("✅ 消息投递 worker 启动完成")
         
         yield
         
@@ -92,25 +79,11 @@ async def lifespan(app: FastAPI):
         # 关闭时
         logger.info("🛑 关闭FastAPI应用...")
         
-        # 停止性能优化组件
         try:
-            from services.common.message_cache import get_message_cache
-            from services.common.retry_queue import get_retry_queue
-            from services.common.batch_writer import get_batch_writer
-            
-            cache = get_message_cache()
-            await cache.stop()
-            logger.info("✅ 消息缓存管理器已停止")
-            
-            retry_queue = get_retry_queue()
-            await retry_queue.stop()
-            logger.info("✅ 智能重试队列已停止")
-            
-            batch_writer = get_batch_writer()
-            await batch_writer.stop()
-            logger.info("✅ 批量数据库写入器已停止")
+            from services.delivery_worker import get_delivery_worker
+            await get_delivery_worker().stop()
         except Exception as e:
-            logger.error(f"停止性能优化组件失败: {e}")
+            logger.error(f"停止投递 worker 失败: {e}")
         
         if enhanced_bot_instance:
             await enhanced_bot_instance.stop()
@@ -123,16 +96,15 @@ app = FastAPI(
     description="""
 ## 📱 Telegram消息转发和管理中心
 
-一个功能强大的Telegram消息转发、媒体监控和管理平台，提供完整的API接口。
+一个将 Telegram 实时消息过滤、审核并投递到多个目标的管理平台。
 
 ### 🌟 主要功能
 
-* **消息转发**: 自动转发Telegram消息，支持关键词过滤、黑白名单
-* **媒体监控**: 监控频道媒体文件，自动下载和归档
-* **115网盘**: 直接上传到115云盘，支持文件管理
+* **消息队列**: 实时消息经过过滤、替换和去重后持久化
+* **多目标投递**: 支持 Telegram 复制发送和签名 Webhook
 * **客户端管理**: 多账号管理，支持会话持久化
 * **规则引擎**: 灵活的转发规则配置
-* **日志记录**: 完整的操作日志和审计追踪
+* **人工审核**: 支持编辑、批准、拒绝和失败重试
 
 ### 🔐 认证说明
 
@@ -177,10 +149,6 @@ app = FastAPI(
             "description": "消息转发规则的增删改查，支持关键词过滤、黑白名单等"
         },
         {
-            "name": "日志管理",
-            "description": "查看和管理系统日志、消息转发日志等"
-        },
-        {
             "name": "聊天管理",
             "description": "Telegram聊天会话管理，包括频道、群组、私聊等"
         },
@@ -197,28 +165,12 @@ app = FastAPI(
             "description": "数据统计和可视化，展示系统运行状态和统计信息"
         },
         {
-            "name": "媒体监控",
-            "description": "媒体文件监控规则管理，自动下载频道媒体文件"
+            "name": "消息队列",
+            "description": "过滤和去重后的消息审核、缓存与投递状态"
         },
         {
-            "name": "媒体文件",
-            "description": "媒体文件管理，包括查看、下载、删除等操作"
-        },
-        {
-            "name": "媒体配置",
-            "description": "媒体管理全局配置，包括下载设置、归档策略等"
-        },
-        {
-            "name": "115网盘",
-            "description": "115云盘集成，支持文件上传、目录管理等操作"
-        },
-        {
-            "name": "资源监控",
-            "description": "资源链接监控，自动捕获115/磁力/ed2k链接，支持自动转存到115网盘"
-        },
-        {
-            "name": "通知系统",
-            "description": "多渠道推送通知管理，支持Telegram/Webhook通知，可自定义通知规则和模板"
+            "name": "发送目标",
+            "description": "Telegram 和 Webhook 多目标配置"
         }
     ],
     contact={
@@ -237,8 +189,8 @@ app.add_middleware(AuthenticationMiddleware)
 # CORS配置（最后添加，最先执行）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 允许所有域名（生产环境建议指定具体域名）
-    allow_credentials=True,
+    allow_origins=["*"],  # API 使用 Bearer Token，不依赖跨域 Cookie
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -248,21 +200,13 @@ app.include_router(auth.router, prefix="/api", tags=["认证"])  # 认证路由�
 app.include_router(users.router, prefix="/api/users", tags=["用户管理"])
 app.include_router(system.router, prefix="/api/system", tags=["系统管理"])
 app.include_router(rules.router, prefix="/api/rules", tags=["转发规则"])
-app.include_router(logs.router, prefix="/api/logs", tags=["日志管理"])
 app.include_router(chats.router, prefix="/api/chats", tags=["聊天管理"])
 app.include_router(clients.router, prefix="/api/clients", tags=["客户端管理"])
 app.include_router(settings.router, prefix="/api/settings", tags=["系统设置"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["仪表板"])
-app.include_router(media_monitor.router, prefix="/api/media/monitor", tags=["媒体监控"])
-app.include_router(media_files.router, prefix="/api/media", tags=["媒体文件"])
-app.include_router(media_settings.router, prefix="/api/settings/media", tags=["媒体配置"])
-app.include_router(pan115.router, prefix="/api/pan115", tags=["115网盘"])
-app.include_router(clouddrive2_settings.router, prefix="/api/settings/clouddrive2", tags=["CloudDrive2配置"])
-app.include_router(resource_monitor.router, prefix="/api/resources", tags=["资源监控"])
-app.include_router(performance.router, prefix="/api/performance", tags=["性能监控"])
-app.include_router(notifications.router, prefix="/api/notifications", tags=["通知系统"])
-app.include_router(upload_progress.router, prefix="/api", tags=["上传进度"])
-app.include_router(upload_websocket.router, tags=["WebSocket"])
+app.include_router(messages.router, prefix="/api/messages", tags=["消息队列"])
+app.include_router(delivery_targets.router, prefix="/api/delivery-targets", tags=["发送目标"])
+app.include_router(public_resources.router, prefix="/public/resources", tags=["公开资源"])
 
 
 @app.get("/health")
@@ -361,4 +305,3 @@ if __name__ == "__main__":
         reload=True,  # 开发模式自动重载
         log_level="info"
     )
-

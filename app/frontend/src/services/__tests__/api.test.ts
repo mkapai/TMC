@@ -1,59 +1,47 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import axios from 'axios'
-import { api, handleApiError } from '../api'
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Mock axios
-vi.mock('axios')
+const mocks = vi.hoisted(() => ({
+  get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn(),
+}));
+const state = vi.hoisted(() => ({ clientConfig: undefined as unknown }));
+
+vi.mock('axios', () => ({
+  default: {
+    create: (config: unknown) => {
+      state.clientConfig = config;
+      return {
+        ...mocks,
+        defaults: { headers: { common: {} } },
+        interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } },
+      };
+    },
+  },
+}));
+
+import { api, handleApiError } from '../api';
 
 describe('API Service', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
+  beforeEach(() => vi.clearAllMocks());
 
-  describe('api.get', () => {
-    it('should make GET request and return data', async () => {
-      const mockData = { id: 1, name: 'Test' }
-      const axiosGetSpy = vi.spyOn(axios, 'get').mockResolvedValue({ data: mockData })
+  it('uses same-origin requests without cookie credentials by default', () => {
+    expect(state.clientConfig).toEqual(expect.objectContaining({ baseURL: '' }));
+    expect(state.clientConfig).not.toHaveProperty('withCredentials');
+  });
 
-      const result = await api.get('/test')
+  it('returns GET response data', async () => {
+    mocks.get.mockResolvedValue({ data: { id: 1 } });
+    await expect(api.get('/test')).resolves.toEqual({ id: 1 });
+    expect(mocks.get).toHaveBeenCalledWith('/test', { params: undefined });
+  });
 
-      expect(axiosGetSpy).toHaveBeenCalledWith('/test', undefined)
-      expect(result).toEqual(mockData)
-    })
-  })
+  it('sends POST request data', async () => {
+    mocks.post.mockResolvedValue({ data: { success: true } });
+    await expect(api.post('/test', { name: 'value' })).resolves.toEqual({ success: true });
+    expect(mocks.post).toHaveBeenCalledWith('/test', { name: 'value' });
+  });
 
-  describe('api.post', () => {
-    it('should make POST request with data', async () => {
-      const mockData = { id: 1 }
-      const postData = { name: 'Test' }
-      const axiosPostSpy = vi.spyOn(axios, 'post').mockResolvedValue({ data: mockData })
-
-      const result = await api.post('/test', postData)
-
-      expect(axiosPostSpy).toHaveBeenCalledWith('/test', postData, undefined)
-      expect(result).toEqual(mockData)
-    })
-  })
-
-  describe('handleApiError', () => {
-    it('should handle Axios error with response', () => {
-      const error = {
-        isAxiosError: true,
-        response: {
-          data: {
-            message: 'Test error'
-          }
-        }
-      }
-
-      expect(() => handleApiError(error)).toThrow('Test error')
-    })
-
-    it('should handle unknown error', () => {
-      const error = new Error('Unknown error')
-
-      expect(() => handleApiError(error)).toThrow('未知错误')
-    })
-  })
-})
-
+  it('uses API and generic error messages', () => {
+    expect(() => handleApiError({ response: { data: { message: 'API error' } } })).toThrow('API error');
+    expect(() => handleApiError(new Error('Unknown error'))).toThrow('Unknown error');
+  });
+});

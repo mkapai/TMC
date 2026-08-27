@@ -11,17 +11,17 @@ export { API_ROUTES, buildApiUrl, isValidApiPath } from './api-config';
 
 // 各模块API服务
 export { settingsApi } from './settings';
-export { rulesApi, keywordsApi, replacementsApi } from './rules';
-export { logsApi } from './logs';
+export { rulesApi, keywordsApi, replaceRulesApi } from './rules';
 export { chatsApi } from './chats';
 export { clientsApi } from './clients';
 export { systemApi } from './system';
 export { dashboardApi } from './dashboard';
+export { messagesApi } from './messages';
+export { deliveryTargetsApi } from './deliveryTargets';
 
 // 类型定义
 export type * from './settings';
 export type * from './rules';
-export type * from './logs';
 export type * from './chats';
 export type * from './clients';
 
@@ -32,12 +32,12 @@ export type * from './clients';
 export const apiService = {
   settings: () => import('./settings').then(m => m.settingsApi),
   rules: () => import('./rules').then(m => m.rulesApi),
-  logs: () => import('./logs').then(m => m.logsApi),
   chats: () => import('./chats').then(m => m.chatsApi),
   clients: () => import('./clients').then(m => m.clientsApi),
   system: () => import('./system').then(m => m.systemApi),
   dashboard: () => import('./dashboard').then(m => m.dashboardApi),
+  messages: () => import('./messages').then(m => m.messagesApi),
+  deliveryTargets: () => import('./deliveryTargets').then(m => m.deliveryTargetsApi),
 };
 
 export default apiService;
-

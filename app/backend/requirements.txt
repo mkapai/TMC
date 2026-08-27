@@ -1,11 +1,11 @@
 # 核心依赖
 telethon==1.36.0
 PySocks==1.7.1
+python-socks[asyncio]==2.8.2
 sqlalchemy==2.0.35
 aiosqlite==0.19.0
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
-python-telegram-bot==21.7
 loguru==0.7.2
 python-dotenv==1.0.1
 pydantic==2.9.2
@@ -15,9 +15,7 @@ pydantic-settings==2.6.0
 alembic==1.14.0
 
 # 网络和API
-aiohttp==3.11.7
-httpx==0.27.2
-requests==2.32.3
+httpx[socks]==0.27.2
 
 # 时间处理
 pytz==2024.2
@@ -25,23 +23,6 @@ python-dateutil==2.9.0.post0
 
 # 其他工具
 cryptography==43.0.3
-Pillow==11.0.0
-protobuf>=4.21.0
-
-# 115上传依赖
-lz4>=4.3.2  # LZ4压缩/解压
-oss2>=2.18.0  # 阿里云OSS SDK
-
-# CloudDrive2 gRPC API（推荐的上传方案）
-grpcio>=1.60.0  # gRPC核心库
-grpcio-tools>=1.60.0  # gRPC工具（用于生成proto代码）
-
-# 115网盘SDK  
-# p115client库 - 因依赖p115cipher.fast(C扩展)无法在当前环境使用,已禁用
-# 依赖问题: ModuleNotFoundError: No module named 'p115cipher.fast'
-# 需要编译环境(gcc, python-dev)且fork版本可能不完整
-# 当前使用Web API方案替代,功能完全满足需求
-# git+https://github.com/lifeifei1993/22222.git
 
 # 认证
 bcrypt==4.0.1

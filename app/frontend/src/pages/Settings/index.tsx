@@ -20,9 +20,6 @@ import {
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { settingsApi } from '../../services/settings';
 import { useThemeContext } from '../../theme';
-import Pan115Settings from './Pan115Settings';
-import MediaSettingsPage from './MediaSettings';
-import CloudDrive2Settings from './CloudDrive2Settings';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -61,6 +58,9 @@ const SettingsPage: React.FC = () => {
         log_retention_days: currentConfig.log_retention_days,
         log_cleanup_time: currentConfig.log_cleanup_time,
         max_log_size: currentConfig.max_log_size,
+        public_base_url: currentConfig.public_base_url,
+        resource_cache_max_gb: currentConfig.resource_cache_max_gb,
+        public_resource_ttl_days: currentConfig.public_resource_ttl_days,
       });
     }
   }, [currentConfig, proxyForm, systemForm]);
@@ -281,12 +281,38 @@ const SettingsPage: React.FC = () => {
               style={{ maxWidth: 600 }}
             >
               <Alert
-                message="日志清理配置"
-                description="自动清理旧日志文件以节省存储空间"
+                message="消息资源公开访问"
+                description="Webhook 消息包含附件时必须配置外部可访问地址；公开链接将在设定的有效期后失效。"
                 type="info"
                 showIcon
                 style={{ marginBottom: '24px' }}
               />
+
+              <Form.Item
+                label="公开访问地址"
+                name="public_base_url"
+                rules={[{ type: 'url', warningOnly: true }]}
+                tooltip="例如 https://tmc.example.com，不包含末尾斜杠"
+              >
+                <Input placeholder="https://tmc.example.com" />
+              </Form.Item>
+
+              <Form.Item
+                label="公开资源有效期（天）"
+                name="public_resource_ttl_days"
+                rules={[{ required: true, message: '请输入有效期' }]}
+                tooltip="仅限制公开链接；队列详情中的受保护预览不受此有效期影响"
+              >
+                <InputNumber min={1} max={3650} precision={0} style={{ width: '100%' }} />
+              </Form.Item>
+
+              <Form.Item
+                label="消息附件缓存上限（GB）"
+                name="resource_cache_max_gb"
+                rules={[{ required: true, message: '请输入缓存容量' }]}
+              >
+                <InputNumber min={0.1} max={100000} step={1} style={{ width: '100%' }} />
+              </Form.Item>
 
               <Form.Item
                 label="启用日志清理"
@@ -328,21 +354,6 @@ const SettingsPage: React.FC = () => {
             </Form>
                 </div>
               ),
-            },
-            {
-              key: 'media',
-              label: '媒体配置',
-              children: <MediaSettingsPage />,
-            },
-            {
-              key: 'pan115',
-              label: '115网盘',
-              children: <Pan115Settings />,
-            },
-            {
-              key: 'clouddrive2',
-              label: 'CloudDrive2',
-              children: <CloudDrive2Settings />,
             },
           ]}
         />

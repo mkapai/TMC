@@ -15,7 +15,6 @@ import { useQuery } from '@tanstack/react-query';
 import {
   DashboardOutlined,
   SettingOutlined,
-  FileTextOutlined,
   MessageOutlined,
   TeamOutlined,
   MenuFoldOutlined,
@@ -24,13 +23,8 @@ import {
   ContainerOutlined,
   LogoutOutlined,
   SafetyOutlined,
-  CloudDownloadOutlined,
-  DownloadOutlined,
-  FolderOpenOutlined,
-  LinkOutlined,
-  ToolOutlined,
-  BellOutlined,
   MenuOutlined,
+  SendOutlined,
 } from '@ant-design/icons';
 import ThemeSwitcher from './ThemeSwitcher';
 import { useAuth } from '../../contexts/AuthContext';
@@ -38,20 +32,17 @@ import { useAuth } from '../../contexts/AuthContext';
 const { Header, Sider } = Layout;
 const { useBreakpoint } = Grid;
 
-// 菜单项配置 - 使用子菜单优化
 const menuItems: any[] = [
-  // 仪表板 - 独立入口
   {
     key: '/dashboard',
     icon: <DashboardOutlined />,
     label: '仪表板',
     path: '/dashboard',
     title: '📊 仪表板',
-    description: '业务概览、性能监控、系统健康一站式监控',
+    description: '消息审核与多目标投递概览',
     group: 'overview',
   },
   
-  // 消息管理 - 子菜单
   {
     key: 'divider-1',
     type: 'divider',
@@ -80,97 +71,26 @@ const menuItems: any[] = [
         description: '配置和管理消息转发规则',
       },
       {
-        key: '/system-logs',
-        icon: <FileTextOutlined />,
-        label: '转发日志',
-        path: '/system-logs',
-        title: '📜 转发日志',
-        description: '查看消息转发历史记录',
+        key: '/messages',
+        icon: <MessageOutlined />,
+        label: '消息队列',
+        path: '/messages',
+        title: '消息队列',
+        description: '审核消息并查看每个目标的投递状态',
+      },
+      {
+        key: '/delivery-targets',
+        icon: <SendOutlined />,
+        label: '发送目标',
+        path: '/delivery-targets',
+        title: '发送目标',
+        description: '管理 Telegram 与 Webhook 目标',
       },
     ],
   },
   
-  // 媒体与下载 - 子菜单
   {
     key: 'divider-2',
-    type: 'divider',
-  },
-  {
-    key: 'media-download',
-    icon: <CloudDownloadOutlined />,
-    label: '媒体与下载',
-    type: 'group',
-    title: '📦 媒体与下载',
-    children: [
-      {
-        key: '/media-monitor',
-        icon: <CloudDownloadOutlined />,
-        label: '监控规则',
-        path: '/media-monitor',
-        title: '📥 监控规则',
-        description: '配置媒体文件自动下载规则',
-      },
-      {
-        key: '/download-tasks',
-        icon: <DownloadOutlined />,
-        label: '下载队列',
-        path: '/download-tasks',
-        title: '⬇️ 下载队列',
-        description: '查看媒体文件下载进度和队列',
-      },
-      {
-        key: '/media-library',
-        icon: <FolderOpenOutlined />,
-        label: '文件管理',
-        path: '/media-library',
-        title: '📁 文件管理',
-        description: '浏览和管理已下载的媒体文件',
-      },
-    ],
-  },
-  
-  // 资源工具 - 子菜单
-  {
-    key: 'divider-3',
-    type: 'divider',
-  },
-  {
-    key: 'resource-tools',
-    icon: <LinkOutlined />,
-    label: '资源工具',
-    type: 'group',
-    title: '🔗 资源工具',
-    children: [
-      {
-        key: '/resource-monitor',
-        icon: <LinkOutlined />,
-        label: '资源监控',
-        path: '/resource-monitor',
-        title: '🔗 资源监控',
-        description: '监控和自动转存115/磁力/ed2k链接',
-      },
-      {
-        key: '/stage6-tools',
-        icon: <ToolOutlined />,
-        label: '高级工具',
-        path: '/stage6-tools',
-        title: '⚡ 高级工具',
-        description: '广告过滤、秒传检测、智能重命名、STRM生成',
-      },
-      {
-        key: '/notifications',
-        icon: <BellOutlined />,
-        label: '推送通知',
-        path: '/notifications',
-        title: '🔔 推送通知',
-        description: '管理多渠道推送通知规则和历史',
-      },
-    ],
-  },
-  
-  // 系统 - 子菜单
-  {
-    key: 'divider-4',
     type: 'divider',
   },
   {
@@ -349,7 +269,7 @@ const MainLayout: React.FC = () => {
       }
     }
     
-    return { title: '📊 仪表板', description: '业务概览、性能监控、系统健康一站式监控' };
+    return { title: '仪表板', description: '消息审核与多目标投递概览' };
   };
 
   const currentPageInfo = getCurrentPageInfo();

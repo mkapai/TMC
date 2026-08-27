@@ -9,7 +9,10 @@
 import sys
 from sqlalchemy import inspect, create_engine
 from sqlalchemy.engine import reflection
-from models import Base, MessageLog, ForwardRule, TelegramClient, User, MediaFile, MediaMonitorRule, MediaSettings
+from models import (
+    DeliveryJob, DeliveryTarget, ForwardRule, MessageResource,
+    QueuedMessage, TelegramClient, User,
+)
 from database import DATABASE_URL
 
 def check_table_columns(engine, table_name, model_class):
@@ -70,13 +73,13 @@ def main():
         
         # 要检查的表和模型映射
         tables_to_check = {
-            'message_logs': MessageLog,
             'forward_rules': ForwardRule,
             'telegram_clients': TelegramClient,
             'users': User,
-            'media_files': MediaFile,
-            'media_monitor_rules': MediaMonitorRule,
-            'media_settings': MediaSettings,
+            'delivery_targets': DeliveryTarget,
+            'queued_messages': QueuedMessage,
+            'message_resources': MessageResource,
+            'delivery_jobs': DeliveryJob,
         }
         
         all_issues = []
@@ -126,5 +129,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-
 

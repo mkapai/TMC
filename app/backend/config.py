@@ -3,6 +3,21 @@ from dotenv import load_dotenv
 from pathlib import Path
 from version import get_version
 
+
+BACKEND_DIR = Path(__file__).resolve().parent
+_repository_root = BACKEND_DIR.parent.parent
+PROJECT_ROOT = _repository_root if (_repository_root / 'config').is_dir() else BACKEND_DIR
+
+
+def _project_path(env_name: str, default: str) -> str:
+    path = Path(os.getenv(env_name, default))
+    return str(path if path.is_absolute() else PROJECT_ROOT / path)
+
+
+def _default_database_url() -> str:
+    return f"sqlite:///{(PROJECT_ROOT / 'data/bot.db').as_posix()}"
+
+
 # 统一配置文件加载器
 class ConfigLoader:
     """统一配置文件加载器，支持多种配置文件格式"""
@@ -12,12 +27,12 @@ class ConfigLoader:
         """按优先级加载配置文件，环境变量优先"""
         # 配置文件搜索路径（按优先级排序）
         config_files = [
-            'config/app.config',    # 持久化主配置文件（推荐）
-            'app.config',           # 根目录主配置文件（兼容）
-            'config/config.env',    # 持久化环境变量文件
-            'config.env',           # 根目录环境变量文件（兼容）
-            'config/.env',          # 持久化开发环境文件
-            '.env'                  # 根目录开发环境文件（兼容）
+            PROJECT_ROOT / 'config/app.config',
+            PROJECT_ROOT / 'app.config',
+            PROJECT_ROOT / 'config/config.env',
+            PROJECT_ROOT / 'config.env',
+            PROJECT_ROOT / 'config/.env',
+            PROJECT_ROOT / '.env',
         ]
         
         # 加载所有存在的配置文件，按优先级顺序（后加载的覆盖先加载的）
@@ -31,7 +46,8 @@ class ConfigLoader:
         if not loaded_files:
             print("[WARNING] 未找到配置文件，使用默认配置")
         else:
-            print(f"[CONFIG] 已加载 {len(loaded_files)} 个配置文件，最终优先级: {' > '.join(reversed(loaded_files))}")
+            priority = ' > '.join(str(path) for path in reversed(loaded_files))
+            print(f"[CONFIG] 已加载 {len(loaded_files)} 个配置文件，最终优先级: {priority}")
         
         # 环境变量已经在系统中，优先级最高
 
@@ -67,17 +83,22 @@ class Config:
     ADMIN_USER_IDS = _parse_admin_ids(os.getenv('ADMIN_USER_IDS', ''))
     
     # === 数据库配置 ===
-    DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///data/bot.db')
+    DATABASE_URL = os.getenv('DATABASE_URL', _default_database_url())
+    PUBLIC_BASE_URL = os.getenv('PUBLIC_BASE_URL', '').rstrip('/')
+    RESOURCE_CACHE_DIR = _project_path('RESOURCE_CACHE_DIR', 'data/message-resources')
+    RESOURCE_CACHE_MAX_GB = float(os.getenv('RESOURCE_CACHE_MAX_GB', '100'))
+    PUBLIC_RESOURCE_TTL_DAYS = int(os.getenv('PUBLIC_RESOURCE_TTL_DAYS', '7'))
+    DELIVERY_SECRET_KEY = os.getenv('DELIVERY_SECRET_KEY', '')
     
     # === 文件路径配置 ===
-    DATA_DIR = os.getenv('DATA_DIR', 'data')
-    LOGS_DIR = os.getenv('LOGS_DIR', 'logs') 
-    TEMP_DIR = os.getenv('TEMP_DIR', 'temp')
-    SESSIONS_DIR = os.getenv('SESSIONS_DIR', 'sessions')
+    DATA_DIR = _project_path('DATA_DIR', 'data')
+    LOGS_DIR = _project_path('LOGS_DIR', 'logs')
+    TEMP_DIR = _project_path('TEMP_DIR', 'temp')
+    SESSIONS_DIR = _project_path('SESSIONS_DIR', 'sessions')
     
     # === 日志配置 ===
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
-    LOG_FILE = os.getenv('LOG_FILE', 'logs/bot.log')
+    LOG_FILE = _project_path('LOG_FILE', 'logs/bot.log')
     ENABLE_LOG_CLEANUP = os.getenv('ENABLE_LOG_CLEANUP', 'true').lower() == 'true'
     LOG_RETENTION_DAYS = int(os.getenv('LOG_RETENTION_DAYS', '30'))
     LOG_CLEANUP_TIME = os.getenv('LOG_CLEANUP_TIME', '02:00')
@@ -85,7 +106,6 @@ class Config:
     
     # === 转发配置 ===
     MAX_FORWARD_DELAY = int(os.getenv('MAX_FORWARD_DELAY', '5'))
-    ENABLE_MEDIA_FORWARD = os.getenv('ENABLE_MEDIA_FORWARD', 'true').lower() == 'true'
     ENABLE_KEYWORD_FILTER = os.getenv('ENABLE_KEYWORD_FILTER', 'true').lower() == 'true'
     ENABLE_REGEX_REPLACE = os.getenv('ENABLE_REGEX_REPLACE', 'true').lower() == 'true'
     
@@ -152,20 +172,6 @@ class Config:
     # === 安全配置 ===
     SESSION_SECRET = os.getenv('SESSION_SECRET', 'your_random_session_secret_key_here')
     
-    # === 高级配置 ===
-    ENABLE_HISTORY_CRAWL = os.getenv('ENABLE_HISTORY_CRAWL', 'false').lower() == 'true'
-    HISTORY_CRAWL_LIMIT = int(os.getenv('HISTORY_CRAWL_LIMIT', '100'))
-    MESSAGE_BATCH_SIZE = int(os.getenv('MESSAGE_BATCH_SIZE', '10'))
-    MESSAGE_PROCESSING_DELAY = int(os.getenv('MESSAGE_PROCESSING_DELAY', '1'))
-    MAX_RETRY_ATTEMPTS = int(os.getenv('MAX_RETRY_ATTEMPTS', '3'))
-    RETRY_DELAY = int(os.getenv('RETRY_DELAY', '5'))
-    
-    # === 监控配置 ===
-    HEALTH_CHECK_ENABLED = os.getenv('HEALTH_CHECK_ENABLED', 'true').lower() == 'true'
-    HEALTH_CHECK_INTERVAL = int(os.getenv('HEALTH_CHECK_INTERVAL', '30'))
-    ENABLE_PERFORMANCE_MONITORING = os.getenv('ENABLE_PERFORMANCE_MONITORING', 'false').lower() == 'true'
-    METRICS_PORT = int(os.getenv('METRICS_PORT', '9394'))
-    
     @classmethod
     def reload(cls):
         """重新加载配置"""
@@ -181,15 +187,29 @@ class Config:
         cls.ADMIN_USER_IDS = cls._parse_admin_ids(os.getenv('ADMIN_USER_IDS', ''))
         
         # 更新其他配置
-        cls.DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///data/bot.db')
+        cls.DATABASE_URL = os.getenv('DATABASE_URL', _default_database_url())
+        cls.PUBLIC_BASE_URL = os.getenv('PUBLIC_BASE_URL', '').rstrip('/')
+        cls.RESOURCE_CACHE_DIR = _project_path('RESOURCE_CACHE_DIR', 'data/message-resources')
+        resource_cache_max_gb = os.getenv('RESOURCE_CACHE_MAX_GB', '100').strip()
+        cls.RESOURCE_CACHE_MAX_GB = float(resource_cache_max_gb or '100')
+        public_resource_ttl_days = os.getenv('PUBLIC_RESOURCE_TTL_DAYS', '7').strip()
+        cls.PUBLIC_RESOURCE_TTL_DAYS = (
+            int(public_resource_ttl_days)
+            if public_resource_ttl_days and public_resource_ttl_days.isdigit()
+            else 7
+        )
+        cls.DELIVERY_SECRET_KEY = os.getenv('DELIVERY_SECRET_KEY', '')
         cls.LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
-        cls.LOG_FILE = os.getenv('LOG_FILE', 'logs/bot.log')
+        cls.DATA_DIR = _project_path('DATA_DIR', 'data')
+        cls.LOGS_DIR = _project_path('LOGS_DIR', 'logs')
+        cls.TEMP_DIR = _project_path('TEMP_DIR', 'temp')
+        cls.SESSIONS_DIR = _project_path('SESSIONS_DIR', 'sessions')
+        cls.LOG_FILE = _project_path('LOG_FILE', 'logs/bot.log')
         
         # 安全的int转换
         max_delay = os.getenv('MAX_FORWARD_DELAY', '5').strip()
         cls.MAX_FORWARD_DELAY = int(max_delay) if max_delay and max_delay.isdigit() else 5
         
-        cls.ENABLE_MEDIA_FORWARD = os.getenv('ENABLE_MEDIA_FORWARD', 'true').lower() == 'true'
         cls.ENABLE_KEYWORD_FILTER = os.getenv('ENABLE_KEYWORD_FILTER', 'true').lower() == 'true'
         cls.ENABLE_REGEX_REPLACE = os.getenv('ENABLE_REGEX_REPLACE', 'true').lower() == 'true'
         
@@ -242,11 +262,8 @@ class Config:
             'proxy_type': cls.PROXY_TYPE if cls.ENABLE_PROXY else None,
             'admin_count': len(cls.ADMIN_USER_IDS),
             'features': {
-                'media_forward': cls.ENABLE_MEDIA_FORWARD,
                 'keyword_filter': cls.ENABLE_KEYWORD_FILTER,
                 'regex_replace': cls.ENABLE_REGEX_REPLACE,
-                'history_crawl': cls.ENABLE_HISTORY_CRAWL,
-                'performance_monitoring': cls.ENABLE_PERFORMANCE_MONITORING
             }
         }
 

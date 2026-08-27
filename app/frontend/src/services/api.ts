@@ -16,9 +16,8 @@ export const setUnauthorizedCallback = (callback: () => void) => {
 
 // 创建axios实例 - 简化版（参考v3.1）
 const createApiClient = (): AxiosInstance => {
-  // 在生产环境中，API和前端在同一个容器内，使用相对路径
-  // 在开发环境中，使用localhost
-  const baseURL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '' : 'http://localhost:9393');
+  // 默认使用同源地址；开发环境由 Vite 代理 /api 请求。
+  const baseURL = import.meta.env.VITE_API_URL || '';
   
   const client = axios.create({
     baseURL,
@@ -26,7 +25,6 @@ const createApiClient = (): AxiosInstance => {
     headers: {
       'Content-Type': 'application/json',
     },
-    withCredentials: true, // 支持跨域cookie
   });
 
   // 请求拦截器 - 简化版 + 认证token支持
@@ -123,6 +121,15 @@ export const api = {
     try {
       const response = await apiClient.get<T>(url, { params });
       return handleApiResponse(response);
+    } catch (error) {
+      return handleApiError(error);
+    }
+  },
+
+  getBlob: async (url: string): Promise<Blob> => {
+    try {
+      const response = await apiClient.get<Blob>(url, { responseType: 'blob' });
+      return response.data;
     } catch (error) {
       return handleApiError(error);
     }

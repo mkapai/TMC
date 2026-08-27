@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Card, Tag, Space, Typography, Tooltip, Button, Collapse } from 'antd';
+import { Tag, Space, Typography, Tooltip, Button } from 'antd';
 import { 
   DownOutlined, 
   UpOutlined, 
@@ -11,7 +11,6 @@ import { useThemeContext } from '../../theme';
 import LogHighlighter from './LogHighlighter';
 
 const { Text } = Typography;
-const { Panel } = Collapse;
 
 interface LogEntry {
   type: 'log' | 'connected' | 'error';
@@ -53,6 +52,7 @@ const SmartLogItem: React.FC<SmartLogItemProps> = ({
   onCopyLog,
   onShowContext
 }) => {
+  void index;
   const { colors } = useThemeContext();
   const [isExpanded, setIsExpanded] = useState(false);
   
@@ -332,4 +332,3 @@ const SmartLogItem: React.FC<SmartLogItemProps> = ({
 };
 
 export default SmartLogItem;
-

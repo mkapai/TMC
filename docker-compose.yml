@@ -1,20 +1,22 @@
-version: '3.8'
 
 # TMC Docker Compose 配置
 # 
-# 版本说明：
-# - test 分支默认使用 hav93/tmc:test 镜像（开发测试版本）
-# - 如需使用稳定版本，设置环境变量: DOCKER_TAG=latest
+# 镜像说明：
+# - 默认从当前目录的 Dockerfile 构建本地镜像 my-python-app:latest
+# - 修改代码后使用 docker compose up -d --build 重新构建并启动
 #
 # 使用方法：
-#   测试版本（默认）: docker-compose up -d
-#   稳定版本: DOCKER_TAG=latest docker-compose up -d
-#   指定版本: DOCKER_TAG=v1.2.0 docker-compose up -d
+#   首次启动或代码更新: docker compose up -d --build
+#   仅启动已有本地镜像: docker compose up -d --no-build
 
 services:
   tmc:
-    image: hav93/tmc:${DOCKER_TAG:-test}  # 默认使用 test 标签，可通过环境变量切换
-    container_name: tmc-${DOCKER_TAG:-test}  # 容器名称根据版本区分
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: my-python-app:latest
+    pull_policy: build
+    container_name: tmc-local
     restart: always
     ports:
       - "${APP_PORT:-9393}:9393"
@@ -25,8 +27,8 @@ services:
       # === Telegram 客户端配置（完全可选）===
       # 【推荐】通过 Web 界面为每个客户端单独配置，无需在此填写
       # 以下仅作为默认值，当客户端未单独配置时使用
-      - API_ID=${API_ID:-}
-      - API_HASH=${API_HASH:-}
+      - API_ID=23056861
+      - API_HASH=23ec1f145112a49d9b08515c8701ce18
       - BOT_TOKEN=${BOT_TOKEN:-}
       - PHONE_NUMBER=${PHONE_NUMBER:-}
       
@@ -42,7 +44,7 @@ services:
       - PGID=1000
       
       # 数据库配置
-      - DATABASE_URL=${DATABASE_URL:-sqlite:///data/bot.db}
+      - DATABASE_URL=${DATABASE_URL:-sqlite:////app/data/bot.db}
       
       # 日志级别
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -54,11 +56,7 @@ services:
       - ${SESSIONS_PATH:-./sessions}:/app/sessions  # Telegram会话文件（重要：登录状态）
       - ${TEMP_PATH:-./temp}:/app/temp              # 临时文件
       - ${CONFIG_PATH:-./config}:/app/config        # 配置文件目录
-      
-      # 媒体管理相关目录（v1.3.0 新增）
-      - ${MEDIA_DOWNLOAD_PATH:-./media/downloads}:/app/media/downloads    # 媒体下载临时目录
-      - ${MEDIA_STORAGE_PATH:-./media/storage}:/app/media/storage        # 媒体归档存储目录
-    
+
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9393/api/health"]
       interval: 30s

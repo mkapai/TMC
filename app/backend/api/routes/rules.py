@@ -21,6 +21,78 @@ logger = get_logger('api.rules', 'api.log')
 router = APIRouter()
 
 
+def _serialize_rule(rule, include_relations: bool = False):
+    data = {
+        "id": rule.id,
+        "name": rule.name,
+        "source_chat_id": rule.source_chat_id,
+        "source_chat_name": rule.source_chat_name,
+        "is_active": rule.is_active,
+        "delivery_mode": getattr(rule, "delivery_mode", "auto"),
+        "destination_ids": [target.id for target in rule.delivery_targets],
+        "delivery_targets": [
+            {"id": target.id, "name": target.name, "target_type": target.target_type}
+            for target in rule.delivery_targets
+        ],
+        "enable_keyword_filter": rule.enable_keyword_filter,
+        "enable_regex_replace": getattr(rule, "enable_regex_replace", False),
+        "client_id": getattr(rule, "client_id", "main_user"),
+        "client_type": getattr(rule, "client_type", "user"),
+        "enable_text": getattr(rule, "enable_text", True),
+        "enable_media": getattr(rule, "enable_media", True),
+        "enable_photo": getattr(rule, "enable_photo", True),
+        "enable_video": getattr(rule, "enable_video", True),
+        "enable_document": getattr(rule, "enable_document", True),
+        "enable_audio": getattr(rule, "enable_audio", True),
+        "enable_voice": getattr(rule, "enable_voice", True),
+        "enable_sticker": getattr(rule, "enable_sticker", False),
+        "enable_animation": getattr(rule, "enable_animation", True),
+        "enable_webpage": getattr(rule, "enable_webpage", True),
+        "forward_delay": getattr(rule, "forward_delay", 0),
+        "max_message_length": getattr(rule, "max_message_length", 4096),
+        "enable_link_preview": getattr(rule, "enable_link_preview", True),
+        "time_filter_type": getattr(rule, "time_filter_type", "after_start"),
+        "start_time": rule.start_time.isoformat() if rule.start_time else None,
+        "end_time": rule.end_time.isoformat() if rule.end_time else None,
+        "enable_deduplication": getattr(rule, "enable_deduplication", False),
+        "dedup_time_window": getattr(rule, "dedup_time_window", 3600),
+        "dedup_check_content": getattr(rule, "dedup_check_content", True),
+        "dedup_check_media": getattr(rule, "dedup_check_media", True),
+        "enable_sender_filter": getattr(rule, "enable_sender_filter", False),
+        "sender_filter_mode": getattr(rule, "sender_filter_mode", "whitelist"),
+        "sender_whitelist": getattr(rule, "sender_whitelist", None),
+        "sender_blacklist": getattr(rule, "sender_blacklist", None),
+        "created_at": rule.created_at.isoformat() if rule.created_at else None,
+        "updated_at": rule.updated_at.isoformat() if rule.updated_at else None,
+    }
+    if include_relations:
+        data["keywords"] = [
+            {
+                "id": keyword.id,
+                "rule_id": keyword.rule_id,
+                "keyword": keyword.keyword,
+                "is_blacklist": keyword.is_exclude,
+                "is_regex": keyword.is_regex,
+                "case_sensitive": keyword.case_sensitive,
+                "created_at": keyword.created_at.isoformat() if keyword.created_at else None,
+            }
+            for keyword in rule.keywords
+        ]
+        data["replace_rules"] = [
+            {
+                "id": replacement.id,
+                "name": replacement.name,
+                "pattern": replacement.pattern,
+                "replacement": replacement.replacement,
+                "priority": replacement.priority,
+                "is_regex": replacement.is_regex,
+                "is_active": replacement.is_active,
+            }
+            for replacement in rule.replace_rules
+        ]
+    return data
+
+
 # ============================================================================
 # 规则CRUD
 # ============================================================================
@@ -35,47 +107,7 @@ async def list_rules():
         # 添加调试日志
         logger.info(f"📋 获取到 {len(rules)} 条规则")
         
-        # 将规则对象转换为字典
-        rules_data = []
-        for rule in rules:
-            rule_dict = {
-                "id": rule.id,
-                "name": rule.name,
-                "source_chat_id": rule.source_chat_id,
-                "source_chat_name": rule.source_chat_name,
-                "target_chat_id": rule.target_chat_id,
-                "target_chat_name": rule.target_chat_name,
-                "is_active": rule.is_active,
-                "enable_keyword_filter": rule.enable_keyword_filter,
-                "enable_regex_replace": getattr(rule, 'enable_regex_replace', False),
-                "client_id": getattr(rule, 'client_id', 'main_user'),
-                "client_type": getattr(rule, 'client_type', 'user'),
-                
-                # 消息类型过滤
-                "enable_text": getattr(rule, 'enable_text', True),
-                "enable_photo": getattr(rule, 'enable_photo', True),
-                "enable_video": getattr(rule, 'enable_video', True),
-                "enable_document": getattr(rule, 'enable_document', True),
-                "enable_audio": getattr(rule, 'enable_audio', True),
-                "enable_voice": getattr(rule, 'enable_voice', True),
-                "enable_sticker": getattr(rule, 'enable_sticker', False),
-                "enable_animation": getattr(rule, 'enable_animation', True),
-                "enable_webpage": getattr(rule, 'enable_webpage', True),
-                
-                # 高级设置
-                "forward_delay": getattr(rule, 'forward_delay', 0),
-                "max_message_length": getattr(rule, 'max_message_length', 4096),
-                "enable_link_preview": getattr(rule, 'enable_link_preview', True),
-                
-                # 时间过滤
-                "time_filter_type": getattr(rule, 'time_filter_type', 'after_start'),
-                "start_time": rule.start_time.isoformat() if rule.start_time else None,
-                "end_time": rule.end_time.isoformat() if rule.end_time else None,
-                
-                "created_at": rule.created_at.isoformat() if rule.created_at else None,
-                "updated_at": rule.updated_at.isoformat() if rule.updated_at else None
-            }
-            rules_data.append(rule_dict)
+        rules_data = [_serialize_rule(rule) for rule in rules]
         
         return JSONResponse(content={
             "success": True,
@@ -97,7 +129,7 @@ async def create_rule(request: Request):
         from services.business_services import ForwardRuleService
         
         # 验证必需的字段
-        required_fields = ['name', 'source_chat_id', 'target_chat_id']
+        required_fields = ['name', 'source_chat_id', 'destination_ids']
         for field in required_fields:
             if field not in data:
                 return JSONResponse(content={
@@ -106,58 +138,22 @@ async def create_rule(request: Request):
                 }, status_code=400)
         
         # 提取参数，排除必需字段和已明确传递的字段
-        excluded_fields = required_fields + ['source_chat_name', 'target_chat_name']
+        if data.get('delivery_mode', 'auto') not in ('auto', 'manual'):
+            return JSONResponse(content={"success": False, "message": "无效的发送模式"}, status_code=400)
+        if not data.get('destination_ids'):
+            return JSONResponse(content={"success": False, "message": "至少选择一个发送目标"}, status_code=400)
+        excluded_fields = ['name', 'source_chat_id', 'source_chat_name']
         kwargs = {k: v for k, v in data.items() if k not in excluded_fields}
         
         rule = await ForwardRuleService.create_rule(
             name=data['name'],
             source_chat_id=data['source_chat_id'],
             source_chat_name=data.get('source_chat_name', ''),
-            target_chat_id=data['target_chat_id'],
-            target_chat_name=data.get('target_chat_name', ''),
             **kwargs
         )
         
         # 序列化规则数据
-        rule_data = None
-        if rule:
-            rule_data = {
-                "id": rule.id,
-                "name": rule.name,
-                "source_chat_id": rule.source_chat_id,
-                "source_chat_name": rule.source_chat_name,
-                "target_chat_id": rule.target_chat_id,
-                "target_chat_name": rule.target_chat_name,
-                "is_active": rule.is_active,
-                "enable_keyword_filter": rule.enable_keyword_filter,
-                "enable_regex_replace": getattr(rule, 'enable_regex_replace', False),
-                "client_id": getattr(rule, 'client_id', 'main_user'),
-                "client_type": getattr(rule, 'client_type', 'user'),
-                
-                # 消息类型过滤
-                "enable_text": getattr(rule, 'enable_text', True),
-                "enable_photo": getattr(rule, 'enable_photo', True),
-                "enable_video": getattr(rule, 'enable_video', True),
-                "enable_document": getattr(rule, 'enable_document', True),
-                "enable_audio": getattr(rule, 'enable_audio', True),
-                "enable_voice": getattr(rule, 'enable_voice', True),
-                "enable_sticker": getattr(rule, 'enable_sticker', False),
-                "enable_animation": getattr(rule, 'enable_animation', True),
-                "enable_webpage": getattr(rule, 'enable_webpage', True),
-                
-                # 高级设置
-                "forward_delay": getattr(rule, 'forward_delay', 0),
-                "max_message_length": getattr(rule, 'max_message_length', 4096),
-                "enable_link_preview": getattr(rule, 'enable_link_preview', True),
-                
-                # 时间过滤
-                "time_filter_type": getattr(rule, 'time_filter_type', 'after_start'),
-                "start_time": rule.start_time.isoformat() if rule.start_time else None,
-                "end_time": rule.end_time.isoformat() if rule.end_time else None,
-                
-                "created_at": rule.created_at.isoformat() if rule.created_at else None,
-                "updated_at": rule.updated_at.isoformat() if rule.updated_at else None
-            }
+        rule_data = _serialize_rule(rule) if rule else None
         
         return JSONResponse(content={
             "success": True,
@@ -185,60 +181,7 @@ async def get_rule(rule_id: int):
                 "message": "规则不存在"
             }, status_code=404)
         
-        # 序列化规则数据
-        rule_dict = {
-            "id": rule.id,
-            "name": rule.name,
-            "source_chat_id": rule.source_chat_id,
-            "source_chat_name": rule.source_chat_name,
-            "target_chat_id": rule.target_chat_id,
-            "target_chat_name": rule.target_chat_name,
-            "is_active": rule.is_active,
-            "enable_keyword_filter": rule.enable_keyword_filter,
-            "enable_regex_replace": getattr(rule, 'enable_regex_replace', False),
-            "client_id": getattr(rule, 'client_id', 'main_user'),
-            "client_type": getattr(rule, 'client_type', 'user'),
-            
-            # 消息类型过滤
-            "enable_text": getattr(rule, 'enable_text', True),
-            "enable_photo": getattr(rule, 'enable_photo', True),
-            "enable_video": getattr(rule, 'enable_video', True),
-            "enable_document": getattr(rule, 'enable_document', True),
-            "enable_audio": getattr(rule, 'enable_audio', True),
-            "enable_voice": getattr(rule, 'enable_voice', True),
-            "enable_sticker": getattr(rule, 'enable_sticker', False),
-            "enable_animation": getattr(rule, 'enable_animation', True),
-            "enable_webpage": getattr(rule, 'enable_webpage', True),
-            
-            # 高级设置
-            "forward_delay": getattr(rule, 'forward_delay', 0),
-            "max_message_length": getattr(rule, 'max_message_length', 4096),
-            "enable_link_preview": getattr(rule, 'enable_link_preview', True),
-            
-            # 时间过滤
-            "time_filter_type": getattr(rule, 'time_filter_type', 'after_start'),
-            "start_time": rule.start_time.isoformat() if rule.start_time else None,
-            "end_time": rule.end_time.isoformat() if rule.end_time else None,
-            
-            "created_at": rule.created_at.isoformat() if rule.created_at else None,
-            "updated_at": rule.updated_at.isoformat() if rule.updated_at else None,
-            
-            # 关联数据
-            "keywords": [
-                {
-                    "id": kw.id,
-                    "rule_id": kw.rule_id,
-                    "keyword": kw.keyword,
-                    "is_blacklist": kw.is_exclude,
-                    "created_at": kw.created_at.isoformat() if kw.created_at else None
-                }
-                for kw in rule.keywords
-            ] if rule.keywords else [],
-            "replace_rules": [
-                {"pattern": rr.pattern, "replacement": rr.replacement} 
-                for rr in rule.replace_rules
-            ] if rule.replace_rules else []
-        }
+        rule_dict = _serialize_rule(rule, include_relations=True)
         
         return JSONResponse(content={
             "success": True,
@@ -267,21 +210,18 @@ async def update_rule(rule_id: int, request: Request):
                 "message": "规则不存在"
             }, status_code=404)
         
+        if data.get('delivery_mode', existing_rule.delivery_mode) not in ('auto', 'manual'):
+            return JSONResponse(content={"success": False, "message": "无效的发送模式"}, status_code=400)
+        if 'destination_ids' in data and not data['destination_ids']:
+            return JSONResponse(content={"success": False, "message": "至少选择一个发送目标"}, status_code=400)
+
         # 过滤掉不应该更新的字段
         excluded_fields = ['id', 'created_at']
         update_data = {k: v for k, v in data.items() if k not in excluded_fields}
         
-        # 检测激活操作
-        is_activating = (
-            'is_active' in update_data and 
-            update_data['is_active'] is True and 
-            not existing_rule.is_active
-        )
-        
         logger.info(f"更新规则 {rule_id}:")
         logger.info(f"  - 过滤后更新数据: {update_data}")
         logger.info(f"  - 现有规则状态: is_active={existing_rule.is_active}")
-        logger.info(f"  - 是否激活操作: {is_activating}")
         
         # 更新规则
         success = await ForwardRuleService.update_rule(rule_id, **update_data)
@@ -295,58 +235,7 @@ async def update_rule(rule_id: int, request: Request):
         # 获取更新后的规则
         updated_rule = await ForwardRuleService.get_rule_by_id(rule_id)
         
-        # 如果是激活规则且enhanced_bot存在，触发历史消息转发
-        if is_activating:
-            enhanced_bot = get_enhanced_bot()
-            if enhanced_bot:
-                try:
-                    # 获取最近24小时内的历史消息进行转发
-                    await enhanced_bot.forward_history_messages(rule_id, hours=24)
-                    logger.info(f"规则 {rule_id} 激活，已触发历史消息转发")
-                except Exception as history_error:
-                    logger.warning(f"历史消息转发失败: {history_error}")
-                    # 不影响规则更新的成功响应
-        
-        # 序列化返回数据
-        rule_data = None
-        if updated_rule:
-            rule_data = {
-                "id": updated_rule.id,
-                "name": updated_rule.name,
-                "source_chat_id": updated_rule.source_chat_id,
-                "source_chat_name": updated_rule.source_chat_name,
-                "target_chat_id": updated_rule.target_chat_id,
-                "target_chat_name": updated_rule.target_chat_name,
-                "is_active": updated_rule.is_active,
-                "enable_keyword_filter": updated_rule.enable_keyword_filter,
-                "enable_regex_replace": getattr(updated_rule, 'enable_regex_replace', False),
-                "client_id": getattr(updated_rule, 'client_id', 'main_user'),
-                "client_type": getattr(updated_rule, 'client_type', 'user'),
-                
-                # 消息类型过滤
-                "enable_text": getattr(updated_rule, 'enable_text', True),
-                "enable_photo": getattr(updated_rule, 'enable_photo', True),
-                "enable_video": getattr(updated_rule, 'enable_video', True),
-                "enable_document": getattr(updated_rule, 'enable_document', True),
-                "enable_audio": getattr(updated_rule, 'enable_audio', True),
-                "enable_voice": getattr(updated_rule, 'enable_voice', True),
-                "enable_sticker": getattr(updated_rule, 'enable_sticker', False),
-                "enable_animation": getattr(updated_rule, 'enable_animation', True),
-                "enable_webpage": getattr(updated_rule, 'enable_webpage', True),
-                
-                # 高级设置
-                "forward_delay": getattr(updated_rule, 'forward_delay', 0),
-                "max_message_length": getattr(updated_rule, 'max_message_length', 4096),
-                "enable_link_preview": getattr(updated_rule, 'enable_link_preview', True),
-                
-                # 时间过滤
-                "time_filter_type": getattr(updated_rule, 'time_filter_type', 'after_start'),
-                "start_time": updated_rule.start_time.isoformat() if updated_rule.start_time else None,
-                "end_time": updated_rule.end_time.isoformat() if updated_rule.end_time else None,
-                
-                "created_at": updated_rule.created_at.isoformat() if updated_rule.created_at else None,
-                "updated_at": updated_rule.updated_at.isoformat() if updated_rule.updated_at else None
-            }
+        rule_data = _serialize_rule(updated_rule) if updated_rule else None
         
         return JSONResponse(content={
             "success": True,
@@ -896,10 +785,11 @@ async def export_rules(
         from models import ForwardRule, Keyword, ReplaceRule
         from database import get_db
         from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
         
         async for db in get_db():
             # 构建查询
-            query = select(ForwardRule)
+            query = select(ForwardRule).options(selectinload(ForwardRule.delivery_targets))
             if ids:
                 query = query.where(ForwardRule.id.in_(ids))
             
@@ -933,8 +823,8 @@ async def export_rules(
                     "name": rule.name,
                     "source_chat_id": rule.source_chat_id,
                     "source_chat_name": rule.source_chat_name,
-                    "target_chat_id": rule.target_chat_id,
-                    "target_chat_name": rule.target_chat_name,
+                    "delivery_mode": rule.delivery_mode,
+                    "destination_ids": [target.id for target in rule.delivery_targets],
                     "is_active": rule.is_active,
                     "enable_keyword_filter": rule.enable_keyword_filter,
                     "enable_regex_replace": rule.enable_regex_replace,
@@ -1020,8 +910,9 @@ async def import_rules(
     需要登录认证
     """
     try:
-        from models import ForwardRule, Keyword, ReplaceRule
+        from models import DeliveryTarget, ForwardRule, Keyword, ReplaceRule
         from database import get_db
+        from sqlalchemy import select
         
         if not data:
             return JSONResponse({
@@ -1039,8 +930,7 @@ async def import_rules(
                         name=rule_data.get("name", ""),
                         source_chat_id=rule_data.get("source_chat_id", ""),
                         source_chat_name=rule_data.get("source_chat_name"),
-                        target_chat_id=rule_data.get("target_chat_id", ""),
-                        target_chat_name=rule_data.get("target_chat_name"),
+                        delivery_mode=rule_data.get("delivery_mode", "auto"),
                         is_active=rule_data.get("is_active", True),
                         enable_keyword_filter=rule_data.get("enable_keyword_filter", False),
                         enable_regex_replace=rule_data.get("enable_regex_replace", False),
@@ -1080,6 +970,15 @@ async def import_rules(
                     
                     db.add(new_rule)
                     await db.flush()  # 获取新规则的ID
+                    destination_ids = rule_data.get("destination_ids", [])
+                    if destination_ids:
+                        new_rule.delivery_targets = list((await db.scalars(
+                            select(DeliveryTarget).where(
+                                DeliveryTarget.id.in_(destination_ids),
+                                DeliveryTarget.is_active.is_(True),
+                                DeliveryTarget.is_deleted.is_(False),
+                            )
+                        )).all())
                     
                     # 导入关键词
                     for kw_data in rule_data.get("keywords", []):

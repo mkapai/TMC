@@ -245,7 +245,7 @@ export const ClientLoginModal: React.FC<ClientLoginModalProps> = ({
                 <Button 
                   onClick={handleSendCode}
                   disabled={!canResend || loginMutation.isPending}
-                  loading={loginMutation.isPending && loginStep === 'send_code'}
+                  loading={loginMutation.isPending}
                 >
                   {countdown > 0 ? `重新发送 (${countdown}s)` : '重新发送'}
                 </Button>

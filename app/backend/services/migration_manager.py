@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -59,17 +60,13 @@ def check_and_migrate(auto_migrate: bool = True, backup_first: bool = True) -> b
             logger.warning("⚠️ 未找到 alembic.ini，跳过数据库迁移")
             return True
 
-        # 先检测 alembic 是否可用
-        alembic_path = shutil.which("alembic")
-        if not alembic_path:
-            logger.warning("⚠️ 未找到 alembic 可执行文件（PATH 中不存在 'alembic'），将跳过迁移并执行兼容性补丁")
-            try:
-                _post_migration_fix(Config.DATABASE_URL)
-            except Exception as fix_err:
-                logger.warning(f"⚠️ 迁移后兼容性补丁失败: {fix_err}")
-            return True
+        try:
+            import alembic  # noqa: F401
+        except ImportError:
+            logger.error("❌ 当前 Python 环境未安装 alembic，无法保证数据库结构可用")
+            return False
 
-        logger.info(f"🧭 检测到 alembic: {alembic_path}")
+        logger.info(f"🧭 使用当前 Python 解释器执行 Alembic: {sys.executable}")
 
         # SQLite 先做备份
         if backup_first:
@@ -81,7 +78,7 @@ def check_and_migrate(auto_migrate: bool = True, backup_first: bool = True) -> b
 
         logger.info("📦 执行 Alembic 迁移: upgrade head")
         result = subprocess.run(
-            ["alembic", "upgrade", "head"],
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
             cwd=str(alembic_root),
             env=env,
             stdout=subprocess.PIPE,
@@ -91,69 +88,14 @@ def check_and_migrate(auto_migrate: bool = True, backup_first: bool = True) -> b
         )
         if result.returncode == 0:
             logger.info("✅ Alembic 迁移完成")
-            # 迁移完成后做一次兼容性补丁（针对历史数据库缺列）
-            try:
-                _post_migration_fix(Config.DATABASE_URL)
-            except Exception as fix_err:
-                logger.warning(f"⚠️ 迁移后兼容性补丁失败: {fix_err}")
             return True
         else:
             logger.error(f"❌ Alembic 迁移失败: \n{result.stdout}")
             return False
     except FileNotFoundError:
         # 容器/环境未安装 alembic 命令
-        logger.warning("⚠️ 未安装 alembic 命令，跳过迁移并执行兼容性补丁")
-        try:
-            _post_migration_fix(Config.DATABASE_URL)
-        except Exception as fix_err:
-            logger.warning(f"⚠️ 迁移后兼容性补丁失败: {fix_err}")
-        return True
+        logger.error("❌ 未安装 alembic 命令，无法执行数据库迁移")
+        return False
     except Exception as e:
         logger.error(f"❌ 执行数据库迁移异常: {e}")
         return False
-
-
-def _post_migration_fix(db_url: str) -> None:
-    """迁移后的兼容性修复。
-
-    目前主要修复早期版本缺失列的问题（在未安装 alembic 或迁移失败时的兜底处理）。
-    """
-    if not db_url.startswith("sqlite:///"):
-        return
-    import sqlite3
-    db_file = db_url.replace("sqlite:///", "")
-    conn = sqlite3.connect(db_file)
-    try:
-        cur = conn.cursor()
-        # 1) message_logs 兼容列
-        cur.execute("PRAGMA table_info('message_logs')")
-        msg_cols = {row[1] for row in cur.fetchall()}  # 第二列是列名
-        msg_required = {"original_text": "TEXT", "processed_text": "TEXT"}
-        for col, typ in msg_required.items():
-            if col not in msg_cols:
-                cur.execute(f"ALTER TABLE message_logs ADD COLUMN {col} {typ}")
-                logger.info(f"✅ 修复: 为 message_logs 添加缺失列 {col}")
-
-        # 2) notification_rules 新增列（telegram_client_id / telegram_client_type）
-        cur.execute("PRAGMA table_info('notification_rules')")
-        notif_cols = {row[1] for row in cur.fetchall()}
-        if 'telegram_client_id' not in notif_cols:
-            cur.execute("ALTER TABLE notification_rules ADD COLUMN telegram_client_id VARCHAR(100)")
-            logger.info("✅ 修复: 为 notification_rules 添加缺失列 telegram_client_id")
-        if 'telegram_client_type' not in notif_cols:
-            cur.execute("ALTER TABLE notification_rules ADD COLUMN telegram_client_type VARCHAR(20)")
-            logger.info("✅ 修复: 为 notification_rules 添加缺失列 telegram_client_type")
-        if 'bot_enabled' not in notif_cols:
-            cur.execute("ALTER TABLE notification_rules ADD COLUMN bot_enabled BOOLEAN")
-            logger.info("✅ 修复: 为 notification_rules 添加缺失列 bot_enabled")
-        if 'bot_recipients' not in notif_cols:
-            cur.execute("ALTER TABLE notification_rules ADD COLUMN bot_recipients TEXT")
-            logger.info("✅ 修复: 为 notification_rules 添加缺失列 bot_recipients")
-        if 'bot_token' not in notif_cols:
-            cur.execute("ALTER TABLE notification_rules ADD COLUMN bot_token VARCHAR(200)")
-            logger.info("✅ 修复: 为 notification_rules 添加缺失列 bot_token")
-        conn.commit()
-    finally:
-        conn.close()
-
-

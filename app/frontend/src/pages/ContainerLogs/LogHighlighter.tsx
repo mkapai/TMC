@@ -18,6 +18,7 @@ const LogHighlighter: React.FC<LogHighlighterProps> = ({
   contentTypes = [],
   specialContent = {}
 }) => {
+  void specialContent;
   
   /**
    * 高亮 JSON 内容
@@ -235,4 +236,3 @@ const LogHighlighter: React.FC<LogHighlighterProps> = ({
 };
 
 export default LogHighlighter;
-

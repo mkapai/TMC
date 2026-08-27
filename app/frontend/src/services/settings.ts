@@ -19,6 +19,9 @@ export interface BotSettings {
   log_retention_days: number;
   log_cleanup_time: string;
   max_log_size: number;
+  public_base_url: string;
+  resource_cache_max_gb: number;
+  public_resource_ttl_days: number;
 }
 
 export interface ProxyTestRequest {

@@ -84,12 +84,20 @@ export const clientsApi = {
     message: string;
     step?: 'waiting_code' | 'waiting_password' | 'completed';
     user_info?: Record<string, unknown>;
+    cooldown_seconds?: number;
+    auto_started?: boolean;
+    error_type?: string;
+    remaining_seconds?: number;
   }> => {
     const response = await api.post<{
       success: boolean;
       message: string;
       step?: 'waiting_code' | 'waiting_password' | 'completed';
       user_info?: Record<string, unknown>;
+      cooldown_seconds?: number;
+      auto_started?: boolean;
+      error_type?: string;
+      remaining_seconds?: number;
     }>(`/api/clients/${encodeURIComponent(clientId)}/login`, loginData);
     return response;
   },

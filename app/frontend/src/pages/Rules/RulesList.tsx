@@ -97,8 +97,7 @@ const RulesList: React.FC = () => {
     if (rules && rules.length > 0) {
       // 检查是否有占位符格式的聊天名称或空名称
       const hasPlaceholderNames = rules.some(rule => 
-        (!rule.source_chat_name || rule.source_chat_name.trim() === '' || rule.source_chat_name.startsWith('聊天 ')) ||
-        (!rule.target_chat_name || rule.target_chat_name.trim() === '' || rule.target_chat_name.startsWith('聊天 '))
+        !rule.source_chat_name || rule.source_chat_name.trim() === '' || rule.source_chat_name.startsWith('聊天 ')
       );
 
       // 如果发现占位符名称，自动调用更新API
@@ -361,7 +360,7 @@ const RulesList: React.FC = () => {
     // 基本搜索过滤
     const matchesSearch = rule.name.toLowerCase().includes(searchText.toLowerCase()) ||
       rule.source_chat_id?.toString().includes(searchText.toLowerCase()) ||
-      rule.target_chat_id?.toString().includes(searchText.toLowerCase());
+      rule.delivery_targets.some(target => target.name.toLowerCase().includes(searchText.toLowerCase()));
     
     // 确保规则有有效的ID（不应该隐藏任何有效规则）
     const hasValidId = rule.id && rule.id > 0;
@@ -407,18 +406,13 @@ const RulesList: React.FC = () => {
       },
     },
     {
-      title: '目标聊天',
-      dataIndex: 'target_chat_id',
-      key: 'target_chat_id',
-      width: 120,
-      render: (_: number, record: ForwardRule) => {
-        const displayName = getChatDisplayName(record.target_chat_id || '');
-        return (
-          <Tag color="green">
-            {displayName}
-          </Tag>
-        );
-      },
+      title: '发送方式',
+      key: 'delivery',
+      width: 230,
+      render: (_: unknown, record: ForwardRule) => <div>
+        <Tag color={record.delivery_mode === 'manual' ? 'gold' : 'blue'}>{record.delivery_mode === 'manual' ? '人工审核' : '自动发送'}</Tag>
+        {record.delivery_targets.map(target => <Tag key={target.id} color={target.target_type === 'webhook' ? 'green' : 'cyan'}>{target.name}</Tag>)}
+      </div>,
     },
     {
       title: '状态',

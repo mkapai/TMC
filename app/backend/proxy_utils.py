@@ -4,7 +4,7 @@
 """
 import logging
 from typing import Optional, Dict, Any
-from config import Config
+from config import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -12,12 +12,15 @@ class SimpleProxyManager:
     """简化的代理管理器"""
     
     def __init__(self):
-        self.enabled = Config.ENABLE_PROXY
-        self.proxy_type = Config.PROXY_TYPE
-        self.host = Config.PROXY_HOST
-        self.port = Config.PROXY_PORT
-        self.username = Config.PROXY_USERNAME
-        self.password = Config.PROXY_PASSWORD
+        import config
+
+        current_config = config.Config
+        self.enabled = current_config.ENABLE_PROXY
+        self.proxy_type = current_config.PROXY_TYPE
+        self.host = current_config.PROXY_HOST
+        self.port = current_config.PROXY_PORT
+        self.username = current_config.PROXY_USERNAME
+        self.password = current_config.PROXY_PASSWORD
     
     def get_telethon_proxy(self) -> Optional[tuple]:
         """获取Telethon格式的代理配置
@@ -128,12 +131,12 @@ def get_proxy_manager():
     
     # 检查配置文件是否有更新
     import os
-    config_file = '.env'
+    config_file = PROJECT_ROOT / 'config/app.config'
     current_timestamp = None
     
     try:
-        if os.path.exists(config_file):
-            current_timestamp = os.path.getmtime(config_file)
+        if config_file.exists():
+            current_timestamp = config_file.stat().st_mtime_ns
     except Exception:
         pass
     

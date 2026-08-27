@@ -19,7 +19,7 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/api': {
-        target: 'http://localhost:9393',
+        target: 'http://127.0.0.1:9393',
         changeOrigin: true,
         secure: false,
       },
@@ -44,5 +44,8 @@ export default defineConfig({
   },
   optimizeDeps: {
     include: ['react', 'react-dom', 'antd', 'echarts'],
+  },
+  test: {
+    environment: 'happy-dom',
   },
 })

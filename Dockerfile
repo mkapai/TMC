@@ -93,7 +93,7 @@ COPY VERSION /app/VERSION
 COPY --from=frontend-builder /build/dist /app/frontend/dist
 
 # 创建必要的目录
-RUN mkdir -p /app/data /app/logs /app/sessions /app/temp /app/config
+RUN mkdir -p /app/data/message-resources /app/logs /app/sessions /app/temp /app/config
 
 # 复制启动脚本并设置权限
 COPY app/backend/docker-entrypoint.sh /docker-entrypoint.sh
@@ -108,4 +108,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 
 # 启动命令
 CMD ["/docker-entrypoint.sh"]
-

@@ -5,8 +5,9 @@ export interface ForwardRule {
   name: string;
   source_chat_id: string;
   source_chat_name?: string;
-  target_chat_id: string;
-  target_chat_name?: string;
+  delivery_mode: 'auto' | 'manual';
+  destination_ids: number[];
+  delivery_targets: Array<{ id: number; name: string; target_type: 'telegram' | 'webhook' }>;
   
   // 功能开关
   is_active: boolean;
@@ -38,6 +39,15 @@ export interface ForwardRule {
   time_filter_type: 'after_start' | 'all_messages' | 'today_only' | 'from_time' | 'time_range';
   start_time?: string;
   end_time?: string;
+
+  enable_deduplication: boolean;
+  dedup_time_window: number;
+  dedup_check_content: boolean;
+  dedup_check_media: boolean;
+  enable_sender_filter: boolean;
+  sender_filter_mode: 'whitelist' | 'blacklist';
+  sender_whitelist?: string;
+  sender_blacklist?: string;
   
   // 时间戳
   created_at: string;
@@ -46,7 +56,6 @@ export interface ForwardRule {
   // 关联数据
   keywords?: Keyword[];
   replace_rules?: ReplaceRule[];
-  message_logs?: MessageLog[];
 }
 
 export interface Keyword {
@@ -74,8 +83,8 @@ export interface CreateRuleDto {
   name: string;
   source_chat_id: string;
   source_chat_name?: string;
-  target_chat_id: string;
-  target_chat_name?: string;
+  delivery_mode: 'auto' | 'manual';
+  destination_ids: number[];
   
   // 功能开关
   is_active?: boolean;
@@ -104,9 +113,17 @@ export interface CreateRuleDto {
   enable_link_preview?: boolean;
   
   // 时间过滤设置
-  time_filter_type?: 'always' | 'after_start' | 'time_range' | 'from_time' | 'today_only' | 'business_hours' | 'non_business_hours';
+  time_filter_type?: 'after_start' | 'all_messages' | 'time_range' | 'from_time' | 'today_only';
   start_time?: string;
   end_time?: string;
+  enable_deduplication?: boolean;
+  dedup_time_window?: number;
+  dedup_check_content?: boolean;
+  dedup_check_media?: boolean;
+  enable_sender_filter?: boolean;
+  sender_filter_mode?: 'whitelist' | 'blacklist';
+  sender_whitelist?: string | null;
+  sender_blacklist?: string | null;
 }
 
 export interface UpdateRuleDto extends Partial<CreateRuleDto> {
@@ -133,39 +150,7 @@ export interface RuleFilters {
   search?: string;
   is_active?: boolean;
   source_chat?: string;
-  target_chat?: string;
   page?: number;
-  pageSize?: number;
-}
-
-// 消息日志类型
-export interface MessageLog {
-  id: number;
-  rule_id: number;
-  rule_name?: string;
-  source_chat_id: string;
-  source_chat_name?: string;
-  target_chat_id: string;
-  target_chat_name?: string;
-  message_id: number;
-  forwarded_message_id?: number;
-  message_type: string;
-  message_text?: string;
-  status: 'success' | 'failed' | 'filtered';
-  error_message?: string;
-  created_at: string;
-}
-
-export interface LogFilters {
-  rule_id?: number;
-  status?: 'success' | 'failed' | 'filtered' | 'all';
-  message_type?: string;
-  start_date?: string;
-  end_date?: string;
-  date?: string;
-  search?: string;
-  page?: number;
-  limit?: number;
   pageSize?: number;
 }
 

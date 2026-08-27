@@ -9,9 +9,7 @@ import {
   LinkOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
-  FilterOutlined,
   MessageOutlined,
-  SendOutlined,
   RobotOutlined,
   IdcardOutlined,
 } from '@ant-design/icons';
@@ -214,97 +212,6 @@ export const createChatDetailItems = (record: any): DetailItem[] => {
   return items;
 };
 
-export const createMessageDetailItems = (record: any): DetailItem[] => {
-  const statusText =
-    record.status === 'success' ? '成功' :
-    record.status === 'failed' ? '失败' :
-    record.status === 'filtered' ? '已过滤' : record.status;
-
-  const items: DetailItem[] = [
-    {
-      label: '规则',
-      icon: <FilterOutlined />,
-      value: <Text strong>{record.rule_name || '未知'}</Text>,
-    },
-    {
-      label: '源聊天',
-      icon: <UserOutlined />,
-      value: <Text copyable code>{record.source_chat_id || '未知'}</Text>,
-    },
-    {
-      label: '目标聊天',
-      icon: <SendOutlined />,
-      value: <Text copyable code>{record.target_chat_id || '未知'}</Text>,
-    },
-    {
-      label: '状态',
-      icon:
-        record.status === 'success' ? <CheckCircleOutlined /> :
-        record.status === 'failed' ? <CloseCircleOutlined /> :
-        <FilterOutlined />,
-      value: (
-        <Tag
-          color={
-            record.status === 'success' ? 'success' :
-            record.status === 'failed' ? 'error' :
-            'warning'
-          }
-        >
-          {statusText}
-        </Tag>
-      ),
-    },
-    {
-      label: '时间',
-      icon: <ClockCircleOutlined />,
-      value: <Text>{dayjs(record.created_at).format('YYYY-MM-DD HH:mm:ss')}</Text>,
-    },
-  ];
-
-  if (record.message_text) {
-    items.push({
-      label: '消息内容',
-      icon: <MessageOutlined />,
-      value: (
-        <Paragraph
-          style={{
-            backgroundColor: 'var(--message-content-bg)',
-            padding: '12px',
-            borderRadius: '4px',
-            margin: 0,
-          }}
-          ellipsis={{ rows: 5, expandable: true }}
-        >
-          {record.message_text}
-        </Paragraph>
-      ),
-    });
-  }
-
-  if (record.error_message) {
-    items.push({
-      label: '错误信息',
-      icon: <CloseCircleOutlined />,
-      value: (
-        <Paragraph
-          style={{
-            backgroundColor: 'var(--error-message-bg)',
-            padding: '12px',
-            borderRadius: '4px',
-            margin: 0,
-            color: 'var(--error-message-color)',
-          }}
-          ellipsis={{ rows: 3, expandable: true }}
-        >
-          {record.error_message}
-        </Paragraph>
-      ),
-    });
-  }
-
-  return items;
-};
-
 export const createClientDetailItems = (record: any): DetailItem[] => {
   const items: DetailItem[] = [
     {
@@ -390,4 +297,3 @@ export const createClientDetailItems = (record: any): DetailItem[] => {
 
   return items;
 };
-
