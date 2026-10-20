@@ -98,3 +98,34 @@ async def test_resource_cache_public_lookup_capacity_and_delete(
         with pytest.raises(HTTPException) as deleted:
             await _resolve_resource(token, filename, db)
         assert deleted.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_resource_cache_downloads_every_media_group_item(
+    session_factory, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Config, "RESOURCE_CACHE_DIR", str(tmp_path / "resources"))
+    monkeypatch.setattr(Config, "RESOURCE_CACHE_MAX_GB", 1)
+    cache = ResourceCacheService()
+    telegram_messages = [
+        SimpleNamespace(
+            media=object(),
+            file=SimpleNamespace(size=15, name="photo.jpg", ext=".jpg", mime_type="image/jpeg"),
+        ),
+        SimpleNamespace(
+            media=object(),
+            file=SimpleNamespace(size=15, name="video.mp4", ext=".mp4", mime_type="video/mp4"),
+        ),
+    ]
+
+    async with session_factory() as db:
+        message = queued_message()
+        db.add(message)
+        await db.flush()
+        resources = await cache.cache_telegram_media_group(
+            db, message, telegram_messages, DownloadClient()
+        )
+        await db.commit()
+
+    assert [resource.file_name for resource in resources] == ["photo.jpg", "video.mp4"]
+    assert all(Path(resource.storage_path).is_file() for resource in resources)

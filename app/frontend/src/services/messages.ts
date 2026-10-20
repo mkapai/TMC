@@ -13,6 +13,14 @@ export interface MessageFilters {
   page_size?: number;
 }
 
+export interface MessageResourceEdit {
+  text: string;
+  target_ids: number[];
+  remove_resource_ids: number[];
+  files: File[];
+  push: boolean;
+}
+
 const base = '/api/messages';
 
 export const messagesApi = {
@@ -31,6 +39,15 @@ export const messagesApi = {
   },
   update: (id: number, text: string, target_ids: number[], push = false) =>
     api.patch<{ success: boolean }>(`${base}/${id}`, { text, target_ids, push }),
+  edit: (id: number, input: MessageResourceEdit) => {
+    const data = new FormData();
+    data.append('text', input.text);
+    data.append('target_ids', JSON.stringify(input.target_ids));
+    data.append('remove_resource_ids', JSON.stringify(input.remove_resource_ids));
+    data.append('push', String(input.push));
+    input.files.forEach(file => data.append('files', file, file.name));
+    return api.postForm<{ success: boolean }>(`${base}/${id}/edit`, data);
+  },
   preview: (previewUrl: string) => api.getBlob(previewUrl),
   approve: (id: number, target_ids?: number[]) =>
     api.post<{ success: boolean }>(`${base}/${id}/approve`, { target_ids }),

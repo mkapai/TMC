@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import type { DeliveryTarget, QueuedMessage } from '../../types/delivery';
-import { isMessageEditable, mediaPreviewKind, messageTargetOptions } from './helpers';
+import {
+  albumTilePlacement, isImageOrVideoFile, isMessageEditable, limitMediaFiles, mediaPreviewKind,
+  messageTargetOptions,
+} from './helpers';
 
 const baseMessage = {
   status: 'pending_review',
@@ -34,5 +37,43 @@ describe('message review helpers', () => {
     expect(mediaPreviewKind({ name: 'photo.bin', mime_type: 'image/jpeg' } as never)).toBe('image');
     expect(mediaPreviewKind({ name: 'clip.MP4' } as never)).toBe('video');
     expect(mediaPreviewKind({ name: 'archive.zip', mime_type: 'application/zip' } as never)).toBeUndefined();
+  });
+
+  it('limits combined image and video selections while retaining other files', () => {
+    const files = [
+      { name: 'one.jpg', type: 'image/jpeg' },
+      { name: 'two.mp4', type: 'video/mp4' },
+      { name: 'notes.pdf', type: 'application/pdf' },
+    ];
+    expect(isImageOrVideoFile(files[0])).toBe(true);
+    expect(isImageOrVideoFile(files[2])).toBe(false);
+    expect(limitMediaFiles(8, files)).toEqual({
+      accepted: [files[0], files[2]],
+      rejectedCount: 1,
+    });
+  });
+
+  it('uses telegram-style album mosaics without incomplete rows', () => {
+    expect([0, 1, 2].map(index => albumTilePlacement(3, index))).toEqual([
+      { gridColumn: 'span 8', gridRow: 'span 2' },
+      { gridColumn: 'span 4' },
+      { gridColumn: 'span 4' },
+    ]);
+    expect([0, 1, 2, 3, 4].map(index => albumTilePlacement(5, index))).toEqual([
+      { gridColumn: 'span 6' },
+      { gridColumn: 'span 6' },
+      { gridColumn: 'span 4' },
+      { gridColumn: 'span 4' },
+      { gridColumn: 'span 4' },
+    ]);
+    expect([0, 1, 2, 3, 4, 5, 6].map(index => albumTilePlacement(7, index))).toEqual([
+      { gridColumn: 'span 4' },
+      { gridColumn: 'span 4' },
+      { gridColumn: 'span 4' },
+      { gridColumn: 'span 3' },
+      { gridColumn: 'span 3' },
+      { gridColumn: 'span 3' },
+      { gridColumn: 'span 3' },
+    ]);
   });
 });

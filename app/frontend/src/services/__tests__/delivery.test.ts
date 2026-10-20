@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   patch: vi.fn(),
   delete: vi.fn(),
   getBlob: vi.fn(),
+  postForm: vi.fn(),
 }));
 
 vi.mock('../api', () => ({ api }));
@@ -43,6 +44,29 @@ describe('delivery workflow API', () => {
     api.getBlob.mockResolvedValue(blob);
     await expect(messagesApi.preview('/api/messages/resources/11/preview')).resolves.toBe(blob);
     expect(api.getBlob).toHaveBeenCalledWith('/api/messages/resources/11/preview');
+  });
+
+  it('submits resource edits as multipart form data', async () => {
+    const file = new File(['image'], 'added.jpg', { type: 'image/jpeg' });
+    api.postForm.mockResolvedValue({ success: true });
+
+    await messagesApi.edit(7, {
+      text: 'edited',
+      target_ids: [2],
+      remove_resource_ids: [11],
+      files: [file],
+      push: false,
+    });
+
+    expect(api.postForm).toHaveBeenCalledWith('/api/messages/7/edit', expect.any(FormData));
+    const form = api.postForm.mock.calls[0][1] as FormData;
+    expect(form.get('text')).toBe('edited');
+    expect(form.get('target_ids')).toBe('[2]');
+    expect(form.get('remove_resource_ids')).toBe('[11]');
+    const submittedFile = form.get('files') as File;
+    expect(submittedFile.name).toBe('added.jpg');
+    expect(submittedFile.type).toBe('image/jpeg');
+    expect(submittedFile.size).toBe(file.size);
   });
 
   it('submits batch operations', async () => {

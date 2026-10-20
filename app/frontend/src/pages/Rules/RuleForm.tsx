@@ -120,7 +120,6 @@ const RuleForm: React.FC = () => {
         enable_keyword_filter: ruleData.enable_keyword_filter,
         enable_regex_replace: ruleData.enable_regex_replace,
         forward_delay: ruleData.forward_delay,
-        max_message_length: ruleData.max_message_length,
         enable_link_preview: ruleData.enable_link_preview,
         enable_text: ruleData.enable_text,
         enable_photo: ruleData.enable_photo,
@@ -190,7 +189,6 @@ const RuleForm: React.FC = () => {
         
         // 高级设置
         forward_delay: values.forward_delay || 0,
-        max_message_length: values.max_message_length || 4096,
         enable_link_preview: values.enable_link_preview !== false,
         
         // 时间过滤
@@ -276,7 +274,6 @@ const RuleForm: React.FC = () => {
           enable_animation: true,
           enable_webpage: true,
           enable_link_preview: true,
-          max_message_length: 4096,
           forward_delay: 0,
           client_id: 'main_user',
           client_type: 'user',
@@ -478,7 +475,7 @@ const RuleForm: React.FC = () => {
         <Divider orientation="left">高级设置</Divider>
 
         <Row gutter={24}>
-          <Col span={8}>
+          <Col span={12}>
             <Form.Item
               label="转发延迟 (秒)"
               name="forward_delay"
@@ -487,16 +484,7 @@ const RuleForm: React.FC = () => {
               <InputNumber min={0} max={3600} style={{ width: '100%' }} />
             </Form.Item>
           </Col>
-          <Col span={8}>
-            <Form.Item
-              label="最大消息长度"
-              name="max_message_length"
-              tooltip="超过此长度的消息将被截断"
-            >
-              <InputNumber min={1} max={10000} style={{ width: '100%' }} />
-            </Form.Item>
-          </Col>
-          <Col span={8}>
+          <Col span={12}>
             <Form.Item
               label="时间过滤"
               name="time_filter_type"
@@ -507,8 +495,8 @@ const RuleForm: React.FC = () => {
                     <div><strong>1. 仅转发启动后的消息</strong>：从启动或开启转发功能的那一刻起，只转发之后产生的新消息</div>
                     <div><strong>2. 不限制时间</strong>：对收到的实时消息不增加时间条件</div>
                     <div><strong>3. 仅转发当天消息</strong>：以自然日(0点-24点)为标准，只转发当天的消息</div>
-                    <div><strong>4. 从指定时间开始</strong>：从自定义的具体日期时间点开始转发消息</div>
-                    <div><strong>5. 指定时间段内</strong>：只转发在设定的时间段内发送的消息</div>
+                    <div><strong>4. 从指定时间开始</strong>：回填并转发从自定义日期时间点开始的历史及新消息</div>
+                    <div><strong>5. 指定时间段内</strong>：回填并转发设定时间段内的历史消息</div>
                   </div>
                 </div>
               }

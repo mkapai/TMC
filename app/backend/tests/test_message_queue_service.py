@@ -1,12 +1,16 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from models import DeliveryJob, DeliveryTarget, ForwardRule, QueuedMessage, get_local_now
+from config import Config
+from models import DeliveryJob, DeliveryTarget, ForwardRule, MessageResource, QueuedMessage, get_local_now
+from services import resource_cache_service as cache_module
 from services.message_queue_service import MessageQueueError, MessageQueueService
+from services.resource_cache_service import ResourceCacheService
 
 
 def telegram_message(message_id: int, text: str = "accepted"):
@@ -72,6 +76,98 @@ async def test_auto_enqueue_is_unique_and_deduplicates_content(session_factory):
         jobs = list((await db.scalars(select(DeliveryJob))).all())
         assert {job.target_id for job in jobs} == {target.id for target in targets}
         assert {job.status for job in jobs} == {"pending"}
+
+
+@pytest.mark.asyncio
+async def test_media_group_uses_last_telegram_message_as_source_id(session_factory):
+    service = MessageQueueService()
+    rule, _ = await create_rule(session_factory, mode="manual")
+    messages = [telegram_message(10), telegram_message(11)]
+
+    queued_id = await service.enqueue(
+        rule,
+        messages[0],
+        "album",
+        None,
+        media_messages=messages,
+    )
+
+    async with session_factory() as db:
+        queued = await db.get(QueuedMessage, queued_id)
+        assert queued.source_message_id == 11
+
+
+@pytest.mark.asyncio
+async def test_review_can_add_and_remove_uploaded_resources(
+    session_factory, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Config, "RESOURCE_CACHE_DIR", str(tmp_path / "resources"))
+    monkeypatch.setattr(Config, "RESOURCE_CACHE_MAX_GB", 1)
+    cache = ResourceCacheService()
+    monkeypatch.setattr(cache_module, "_resource_cache", cache)
+    service = MessageQueueService()
+    rule, targets = await create_rule(session_factory, mode="manual")
+    message_id = await service.enqueue(rule, telegram_message(12), "draft", None)
+
+    class UploadStub:
+        filename = "added.jpg"
+        content_type = "image/jpeg"
+
+        def __init__(self):
+            self.data = b"added-resource"
+
+        async def read(self, _size):
+            data, self.data = self.data, b""
+            return data
+
+    await service.update_review(
+        message_id,
+        "with resource",
+        [targets[0].id],
+        upload_files=[UploadStub()],
+    )
+    async with session_factory() as db:
+        resource = (await db.scalars(
+            select(MessageResource).where(MessageResource.message_id == message_id)
+        )).one()
+        resource_id = resource.id
+        resource_path = Path(resource.storage_path)
+        assert resource.file_name == "added.jpg"
+        assert resource_path.read_bytes() == b"added-resource"
+
+    await service.update_review(
+        message_id,
+        "without resource",
+        [targets[0].id],
+        remove_resource_ids=[resource_id],
+    )
+    async with session_factory() as db:
+        assert await db.scalar(select(func.count(MessageResource.id))) == 0
+        message = await db.get(QueuedMessage, message_id)
+        assert message.message_type == "text"
+    assert not resource_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_review_rejects_more_than_nine_images_or_videos(session_factory):
+    service = MessageQueueService()
+    rule, targets = await create_rule(session_factory, mode="manual")
+    message_id = await service.enqueue(rule, telegram_message(13), "draft", None)
+
+    uploads = [
+        SimpleNamespace(filename=f"photo-{index}.jpg", content_type="image/jpeg")
+        for index in range(10)
+    ]
+    with pytest.raises(MessageQueueError, match="最多包含9个"):
+        await service.update_review(
+            message_id,
+            "too many resources",
+            [targets[0].id],
+            upload_files=uploads,
+        )
+
+    async with session_factory() as db:
+        assert await db.scalar(select(func.count(MessageResource.id))) == 0
 
 
 @pytest.mark.asyncio

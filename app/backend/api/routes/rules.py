@@ -13,12 +13,22 @@ from log_manager import get_logger
 from api.dependencies import get_enhanced_bot
 from auth import get_current_user
 from models import User
+from timezone_utils import database_time_to_utc_isoformat, rule_time_to_database_time
 import json
 from datetime import datetime
 
 logger = get_logger('api.rules', 'api.log')
 
 router = APIRouter()
+
+
+def _refresh_and_backfill_rule(rule) -> None:
+    bot = get_enhanced_bot()
+    if not bot or not rule:
+        return
+    bot.refresh_monitored_chats()
+    if rule.is_active and rule.time_filter_type in {"from_time", "time_range"} and rule.start_time:
+        bot.multi_client_manager.schedule_history_backfill(rule.client_id, rule.id)
 
 
 def _serialize_rule(rule, include_relations: bool = False):
@@ -52,8 +62,8 @@ def _serialize_rule(rule, include_relations: bool = False):
         "max_message_length": getattr(rule, "max_message_length", 4096),
         "enable_link_preview": getattr(rule, "enable_link_preview", True),
         "time_filter_type": getattr(rule, "time_filter_type", "after_start"),
-        "start_time": rule.start_time.isoformat() if rule.start_time else None,
-        "end_time": rule.end_time.isoformat() if rule.end_time else None,
+        "start_time": database_time_to_utc_isoformat(rule.start_time),
+        "end_time": database_time_to_utc_isoformat(rule.end_time),
         "enable_deduplication": getattr(rule, "enable_deduplication", False),
         "dedup_time_window": getattr(rule, "dedup_time_window", 3600),
         "dedup_check_content": getattr(rule, "dedup_check_content", True),
@@ -151,6 +161,7 @@ async def create_rule(request: Request):
             source_chat_name=data.get('source_chat_name', ''),
             **kwargs
         )
+        _refresh_and_backfill_rule(rule)
         
         # 序列化规则数据
         rule_data = _serialize_rule(rule) if rule else None
@@ -234,6 +245,7 @@ async def update_rule(rule_id: int, request: Request):
         
         # 获取更新后的规则
         updated_rule = await ForwardRuleService.get_rule_by_id(rule_id)
+        _refresh_and_backfill_rule(updated_rule)
         
         rule_data = _serialize_rule(updated_rule) if updated_rule else None
         
@@ -844,8 +856,8 @@ async def export_rules(
                     "max_message_length": rule.max_message_length,
                     "enable_link_preview": rule.enable_link_preview,
                     "time_filter_type": rule.time_filter_type,
-                    "start_time": rule.start_time.isoformat() if rule.start_time else None,
-                    "end_time": rule.end_time.isoformat() if rule.end_time else None,
+                    "start_time": database_time_to_utc_isoformat(rule.start_time),
+                    "end_time": database_time_to_utc_isoformat(rule.end_time),
                     "enable_deduplication": rule.enable_deduplication,
                     "dedup_time_window": rule.dedup_time_window,
                     "dedup_check_content": rule.dedup_check_content,
@@ -962,11 +974,9 @@ async def import_rules(
                     
                     # 处理时间字段
                     if rule_data.get("start_time"):
-                        from datetime import datetime
-                        new_rule.start_time = datetime.fromisoformat(rule_data["start_time"])
+                        new_rule.start_time = rule_time_to_database_time(rule_data["start_time"])
                     if rule_data.get("end_time"):
-                        from datetime import datetime
-                        new_rule.end_time = datetime.fromisoformat(rule_data["end_time"])
+                        new_rule.end_time = rule_time_to_database_time(rule_data["end_time"])
                     
                     db.add(new_rule)
                     await db.flush()  # 获取新规则的ID

@@ -5,6 +5,7 @@ python-socks[asyncio]==2.8.2
 sqlalchemy==2.0.35
 aiosqlite==0.19.0
 fastapi==0.115.5
+python-multipart==0.0.12
 uvicorn[standard]==0.32.1
 loguru==0.7.2
 python-dotenv==1.0.1

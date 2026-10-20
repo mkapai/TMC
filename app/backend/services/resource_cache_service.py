@@ -4,7 +4,7 @@ import mimetypes
 import re
 import secrets
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 from urllib.parse import quote
 
 from sqlalchemy import func, select
@@ -57,7 +57,8 @@ class ResourceCacheService:
 
         original_name = getattr(file_info, "name", None)
         extension = getattr(file_info, "ext", None) or ""
-        fallback = f"telegram-{queued_message.source_message_id}{extension}"
+        telegram_message_id = getattr(telegram_message, "id", queued_message.source_message_id)
+        fallback = f"telegram-{telegram_message_id}{extension}"
         file_name = self.safe_filename(original_name, fallback)
         mime_type = getattr(file_info, "mime_type", None) or mimetypes.guess_type(file_name)[0]
 
@@ -94,6 +95,76 @@ class ResourceCacheService:
             message_id=queued_message.id,
             public_token=token,
             storage_path=str(actual_path),
+            file_name=file_name,
+            mime_type=mime_type,
+            file_size=size,
+            sha256=digest.hexdigest(),
+        )
+        db.add(resource)
+        await db.flush()
+        return resource
+
+    async def cache_telegram_media_group(
+        self,
+        db: AsyncSession,
+        queued_message: QueuedMessage,
+        telegram_messages: Iterable,
+        telegram_client,
+    ) -> list[MessageResource]:
+        resources = []
+        try:
+            for telegram_message in telegram_messages:
+                resource = await self.cache_telegram_media(
+                    db, queued_message, telegram_message, telegram_client
+                )
+                if resource:
+                    resources.append(resource)
+            return resources
+        except Exception:
+            for resource in resources:
+                self.delete_file(resource)
+                await db.delete(resource)
+            raise
+
+    async def cache_uploaded_file(
+        self,
+        db: AsyncSession,
+        queued_message: QueuedMessage,
+        upload,
+    ) -> MessageResource:
+        file_name = self.safe_filename(getattr(upload, "filename", None))
+        mime_type = getattr(upload, "content_type", None) or mimetypes.guess_type(file_name)[0]
+        token = secrets.token_hex(32)
+        message_dir = (self.root / str(queued_message.id)).resolve()
+        if self.root not in message_dir.parents:
+            raise ResourceCacheError("无效的资源缓存路径")
+        message_dir.mkdir(parents=True, exist_ok=True)
+        suffix = Path(file_name).suffix[:16]
+        storage_path = message_dir / f"{token}{suffix}"
+        digest = hashlib.sha256()
+        size = 0
+
+        try:
+            with storage_path.open("wb") as stream:
+                while chunk := await upload.read(1024 * 1024):
+                    size += len(chunk)
+                    digest.update(chunk)
+                    stream.write(chunk)
+            if size == 0:
+                raise ResourceCacheError("不能上传空文件")
+            await self.ensure_capacity(db, size)
+        except Exception:
+            storage_path.unlink(missing_ok=True)
+            try:
+                message_dir.rmdir()
+            except OSError:
+                pass
+            raise
+
+        resource = MessageResource(
+            message_id=queued_message.id,
+            public_token=token,
+            storage_path=str(storage_path),
             file_name=file_name,
             mime_type=mime_type,
             file_size=size,

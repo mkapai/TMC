@@ -221,6 +221,7 @@ class TelegramClientManager:
         self.keyword_filter = KeywordFilter()
         self.regex_replacer = RegexReplacer()
         self.monitored_chats = set()
+        self.history_backfills = set()
         
         # 状态回调
         self.status_callbacks: List[Callable] = []
@@ -527,6 +528,7 @@ class TelegramClientManager:
             
             # 更新监听聊天列表
             await self._update_monitored_chats()
+            asyncio.create_task(self._backfill_time_filtered_rules())
             
             # 关键修复：直接使用run_until_disconnected，不包装在任务中
             self.logger.info(f"🎯 开始监听消息...")
@@ -756,10 +758,20 @@ class TelegramClientManager:
         async def handle_new_message(event):
             """处理新消息事件"""
             try:
+                if getattr(event.message, "grouped_id", None):
+                    return
                 # 异步任务隔离：在独立任务中处理，避免阻塞事件监听
                 asyncio.create_task(self._process_message(event))
             except Exception as e:
                 self.logger.error(f"消息处理任务创建失败: {e}")
+
+        @self.client.on(events.Album())
+        async def handle_album(event):
+            """将 Telegram 相册作为一条多资源消息处理。"""
+            try:
+                asyncio.create_task(self._process_message(event, media_messages=list(event.messages)))
+            except Exception as e:
+                self.logger.error(f"相册消息处理任务创建失败: {e}")
         
         @self.client.on(events.MessageEdited())
         async def handle_message_edited(event):
@@ -803,11 +815,39 @@ class TelegramClientManager:
         future = asyncio.run_coroutine_threadsafe(_download(), self.loop)
         return future.result(timeout=300)  # 5分钟超时
     
-    async def _process_message(self, event, is_edited: bool = False):
+    @staticmethod
+    def _select_primary_message(messages):
+        return next(
+            (
+                message for message in messages
+                if getattr(message, "text", None) or getattr(message, "message", None)
+            ),
+            messages[0],
+        )
+
+    async def _load_album_messages(self, message):
+        grouped_id = getattr(message, "grouped_id", None)
+        if not grouped_id:
+            return [message]
+        try:
+            message_ids = range(max(1, int(message.id) - 9), int(message.id) + 10)
+            candidates = await self.client.get_messages(message.peer_id, ids=list(message_ids))
+            return sorted(
+                [candidate for candidate in candidates if candidate and candidate.grouped_id == grouped_id],
+                key=lambda candidate: candidate.id,
+            ) or [message]
+        except Exception as e:
+            self.logger.warning(f"加载编辑后的相册消息失败: message={message.id}, error={e}")
+            return [message]
+
+    async def _process_message(self, event, is_edited: bool = False, media_messages=None):
         """处理消息（在独立任务中运行）- 优化版"""
         start_time = time.time()
         try:
-            message = event.message
+            if media_messages is None and is_edited and getattr(event.message, "grouped_id", None):
+                media_messages = await self._load_album_messages(event.message)
+            media_messages = list(media_messages or [event.message])
+            message = self._select_primary_message(media_messages)
             
             # 性能优化：提前检查消息有效性
             if not message or not hasattr(message, 'peer_id'):
@@ -853,12 +893,16 @@ class TelegramClientManager:
                 if len(rules) > 1:
                     tasks = []
                     for rule in rules:
-                        task = asyncio.create_task(self._process_rule_safe(rule, message, event, is_edited))
+                        task = asyncio.create_task(self._process_rule_safe(
+                            rule, message, event, is_edited, media_messages
+                        ))
                         tasks.append(task)
                     await asyncio.gather(*tasks, return_exceptions=True)
                 else:
                     # 单个规则直接处理
-                    await self._process_rule_safe(rules[0], message, event, is_edited)
+                    await self._process_rule_safe(
+                        rules[0], message, event, is_edited, media_messages
+                    )
             else:
                 self.logger.debug(f"聊天ID {chat_id} 没有适用的转发规则")
             
@@ -894,32 +938,42 @@ class TelegramClientManager:
             self.logger.error(f"获取转发规则失败: {e}")
             return []
     
-    async def _process_rule_safe(self, rule: ForwardRule, message, event, is_edited: bool = False):
+    async def _process_rule_safe(
+        self, rule: ForwardRule, message, event, is_edited: bool = False, media_messages=None
+    ):
         """安全的规则处理包装器"""
         try:
-            await self._process_rule(rule, message, event, is_edited)
+            await self._process_rule(rule, message, event, is_edited, media_messages)
         except Exception as e:
             self.logger.error(f"处理规则 {rule.id}({rule.name}) 失败: {e}")
 
-    async def _reject_filtered_edit(self, rule: ForwardRule, message, is_edited: bool) -> None:
+    async def _reject_filtered_edit(
+        self, rule: ForwardRule, message, is_edited: bool, media_messages=None
+    ) -> None:
         if not is_edited:
             return
         from services.message_queue_service import get_message_queue_service
-        rejected = await get_message_queue_service().reject_edited_message(rule, message.id)
+        source_message_id = max(
+            int(getattr(media_message, "id", message.id))
+            for media_message in (media_messages or [message])
+        )
+        rejected = await get_message_queue_service().reject_edited_message(rule, source_message_id)
         if rejected:
             self.logger.info(f"编辑后的消息不再满足规则，已拒绝: message={message.id}, rule={rule.name}")
     
-    async def _process_rule(self, rule: ForwardRule, message, event, is_edited: bool = False):
+    async def _process_rule(
+        self, rule: ForwardRule, message, event, is_edited: bool = False, media_messages=None
+    ):
         """处理单个转发规则"""
         try:
             # 消息类型检查
             if not self._check_message_type(rule, message):
-                await self._reject_filtered_edit(rule, message, is_edited)
+                await self._reject_filtered_edit(rule, message, is_edited, media_messages)
                 return
             
             # 时间过滤检查
             if not self._check_time_filter(rule, message):
-                await self._reject_filtered_edit(rule, message, is_edited)
+                await self._reject_filtered_edit(rule, message, is_edited, media_messages)
                 return
             
             # 【新功能】发送者过滤检查
@@ -935,7 +989,7 @@ class TelegramClientManager:
                 )
                 if not is_allowed:
                     self.logger.info(f"⏭️ 发送者 {sender_info['username'] or sender_info['id']} 被过滤器阻止")
-                    await self._reject_filtered_edit(rule, message, is_edited)
+                    await self._reject_filtered_edit(rule, message, is_edited, media_messages)
                     return
             
             # 获取消息文本（对于媒体消息使用caption）
@@ -944,7 +998,7 @@ class TelegramClientManager:
             # 关键词过滤
             if rule.enable_keyword_filter and rule.keywords:
                 if not self.keyword_filter.should_forward(message_text, rule.keywords):
-                    await self._reject_filtered_edit(rule, message, is_edited)
+                    await self._reject_filtered_edit(rule, message, is_edited, media_messages)
                     return
             
             # 文本替换
@@ -952,17 +1006,14 @@ class TelegramClientManager:
             if rule.enable_regex_replace and rule.replace_rules:
                 text_to_forward = self.regex_replacer.apply_replacements(text_to_forward, rule.replace_rules)
             
-            # 长度限制
-            if rule.max_message_length and len(text_to_forward) > rule.max_message_length:
-                text_to_forward = text_to_forward[:rule.max_message_length] + "..."
-            
             from services.message_queue_service import get_message_queue_service
             queue_id = await get_message_queue_service().enqueue(
-                rule, message, text_to_forward, self.client
+                rule, message, text_to_forward, self.client, media_messages=media_messages
             )
             if queue_id:
                 action = "更新" if is_edited else "入队"
                 self.logger.info(f"✅ 消息已{action}: queue_id={queue_id}, rule={rule.name}")
+            return queue_id
             
         except Exception as e:
             self.logger.error(f"规则处理失败: {e}", exc_info=True)
@@ -1113,6 +1164,128 @@ class TelegramClientManager:
             # 转发所有消息（无时间限制）
             return True
         
+        return True
+
+    @staticmethod
+    def _utc_time(value):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    async def _backfill_rule_history(self, rule_id: int, force_full: bool = False) -> None:
+        if rule_id in self.history_backfills:
+            return
+        self.history_backfills.add(rule_id)
+        try:
+            from sqlalchemy import func, select
+            from telethon.tl.types import MessageService
+            from services.business_services import ForwardRuleService
+            from models import QueuedMessage
+
+            rule = await ForwardRuleService.get_rule_by_id(rule_id)
+            if (
+                not rule
+                or not rule.is_active
+                or rule.client_id != self.client_id
+                or rule.time_filter_type not in {"from_time", "time_range"}
+                or not rule.start_time
+            ):
+                return
+
+            iterator_options = {"reverse": True}
+            if not force_full:
+                async with db_manager.async_session() as db:
+                    last_message_id = await db.scalar(select(func.max(QueuedMessage.source_message_id)).where(
+                        QueuedMessage.rule_id == rule.id,
+                        QueuedMessage.client_id == rule.client_id,
+                        QueuedMessage.source_chat_id == str(rule.source_chat_id),
+                    ))
+                if last_message_id:
+                    iterator_options["min_id"] = int(last_message_id)
+
+            if "min_id" not in iterator_options:
+                start_time = self._utc_time(rule.start_time)
+                iterator_options["offset_date"] = start_time - timedelta(microseconds=1)
+
+            end_time = self._utc_time(rule.end_time) if rule.time_filter_type == "time_range" else None
+            chat_id = int(rule.source_chat_id)
+            scanned = 0
+            matched = 0
+            self.logger.info(
+                f"🔄 开始回填历史消息: rule={rule.name}, chat={chat_id}, "
+                f"start={self._utc_time(rule.start_time)}, end={end_time or 'now'}"
+            )
+            album_messages = []
+            album_id = None
+
+            async def flush_album():
+                nonlocal album_messages, album_id, matched
+                if not album_messages:
+                    return
+                primary = self._select_primary_message(album_messages)
+                if await self._process_rule(
+                    rule, primary, event=None, media_messages=album_messages
+                ):
+                    matched += 1
+                album_messages = []
+                album_id = None
+
+            async for message in self.client.iter_messages(chat_id, **iterator_options):
+                message_time = self._utc_time(getattr(message, "date", None))
+                if end_time and message_time and message_time > end_time:
+                    await flush_album()
+                    break
+                if isinstance(message, MessageService):
+                    continue
+                scanned += 1
+                grouped_id = getattr(message, "grouped_id", None)
+                if grouped_id:
+                    if album_id is not None and grouped_id != album_id:
+                        await flush_album()
+                    album_id = grouped_id
+                    album_messages.append(message)
+                    continue
+
+                await flush_album()
+                if await self._process_rule(
+                    rule, message, event=None, media_messages=[message]
+                ):
+                    matched += 1
+            await flush_album()
+
+            self.logger.info(
+                f"✅ 历史消息回填完成: rule={rule.name}, scanned={scanned}, matched={matched}"
+            )
+        except Exception as e:
+            self.logger.error(f"历史消息回填失败: rule_id={rule_id}, error={e}", exc_info=True)
+        finally:
+            self.history_backfills.discard(rule_id)
+
+    async def _backfill_time_filtered_rules(self) -> None:
+        try:
+            from sqlalchemy import select
+
+            async with db_manager.async_session() as db:
+                rule_ids = list((await db.scalars(select(ForwardRule.id).where(
+                    ForwardRule.is_active == True,
+                    ForwardRule.client_id == self.client_id,
+                    ForwardRule.time_filter_type.in_(["from_time", "time_range"]),
+                    ForwardRule.start_time.is_not(None),
+                ))).all())
+            for rule_id in rule_ids:
+                await self._backfill_rule_history(rule_id)
+        except Exception as e:
+            self.logger.error(f"加载历史回填规则失败: {e}", exc_info=True)
+
+    def schedule_history_backfill(self, rule_id: int, force_full: bool = True) -> bool:
+        if not self.loop or not self.running or not self.connected:
+            return False
+        asyncio.run_coroutine_threadsafe(
+            self._backfill_rule_history(rule_id, force_full=force_full),
+            self.loop,
+        )
         return True
     
     async def _update_monitored_chats(self):
@@ -1720,6 +1893,10 @@ class MultiClientManager:
             return False
         
         return client.start()
+
+    def schedule_history_backfill(self, client_id: str, rule_id: int) -> bool:
+        client = self.clients.get(client_id)
+        return client.schedule_history_backfill(rule_id) if client else False
     
     def stop_client(self, client_id: str) -> bool:
         """停止客户端"""

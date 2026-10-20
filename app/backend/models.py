@@ -83,8 +83,8 @@ class ForwardRule(Base):
     
     # 时间过滤设置
     time_filter_type = Column(String(20), default='after_start', comment='时间过滤类型: after_start(启动后), time_range(时间段), from_time(指定时间开始), today_only(仅当天), all_messages(所有消息)')
-    start_time = Column(DateTime, comment='开始时间(用于time_range和from_time类型)')
-    end_time = Column(DateTime, comment='结束时间(用于time_range类型)')
+    start_time = Column(DateTime, comment='UTC开始时间(用于time_range和from_time类型)')
+    end_time = Column(DateTime, comment='UTC结束时间(用于time_range类型)')
     
     # 【新功能】消息去重设置
     enable_deduplication = Column(Boolean, default=False, comment='是否启用消息去重')

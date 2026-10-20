@@ -5,6 +5,7 @@
 """
 import os
 import logging
+import re
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,23 @@ def telegram_time_to_user_time(telegram_dt):
     # 转换到用户时区
     return telegram_dt.astimezone(user_tz)
 
+def rule_time_to_database_time(value):
+    """Normalize a rule time to naive UTC for database storage."""
+    if isinstance(value, str):
+        normalized = value.replace('Z', '+00:00')
+        normalized = re.sub(r'(\.\d{6})\d*', r'\1', normalized)
+        value = datetime.fromisoformat(normalized)
+
+    if not isinstance(value, datetime):
+        return value
+
+    if value.tzinfo is None:
+        user_tz = get_user_timezone()
+        localize = getattr(user_tz, 'localize', None)
+        value = localize(value) if localize else value.replace(tzinfo=user_tz)
+
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
 def database_time_to_user_time(db_dt):
     """
     将数据库时间转换为用户时区时间
@@ -61,17 +79,18 @@ def database_time_to_user_time(db_dt):
     if db_dt is None:
         return None
     
-    user_tz = get_user_timezone()
-    
     if db_dt.tzinfo is None:
-        # 数据库时间没有时区信息，假设是存储为用户时区
-        try:
-            return user_tz.localize(db_dt)
-        except:
-            return db_dt.replace(tzinfo=user_tz)
-    else:
-        # 有时区信息，转换到用户时区
-        return db_dt.astimezone(user_tz)
+        db_dt = db_dt.replace(tzinfo=timezone.utc)
+
+    return db_dt.astimezone(get_user_timezone())
+
+def database_time_to_utc_isoformat(db_dt):
+    """Serialize a stored rule time with an explicit UTC offset."""
+    if db_dt is None:
+        return None
+    if db_dt.tzinfo is None:
+        db_dt = db_dt.replace(tzinfo=timezone.utc)
+    return db_dt.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
 
 # 向后兼容的别名
 get_configured_timezone = get_user_timezone

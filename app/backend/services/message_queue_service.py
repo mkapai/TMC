@@ -16,6 +16,16 @@ from services.resource_cache_service import get_resource_cache
 
 
 EDITABLE_STATUSES = {"ingesting", "pending_review", "queued", "rejected"}
+MAX_MEDIA_ATTACHMENTS = 9
+MEDIA_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "webp", "bmp", "mp4", "webm", "mov", "m4v", "ogv"}
+
+
+def is_image_or_video(file_name: str, mime_type: Optional[str]) -> bool:
+    normalized_mime = (mime_type or "").lower()
+    if normalized_mime.startswith(("image/", "video/")):
+        return True
+    extension = (file_name or "").lower().rsplit(".", 1)[-1]
+    return extension in MEDIA_EXTENSIONS
 
 
 class MessageQueueError(RuntimeError):
@@ -58,6 +68,18 @@ class MessageQueueService:
         if media is not None and media.__class__.__name__ == "MessageMediaWebPage":
             return "webpage"
         return "text"
+
+    @staticmethod
+    async def media_group(client, chat_id, message) -> list:
+        grouped_id = getattr(message, "grouped_id", None)
+        if not grouped_id:
+            return [message]
+        message_ids = range(max(1, int(message.id) - 9), int(message.id) + 10)
+        candidates = await client.get_messages(chat_id, ids=list(message_ids))
+        return sorted(
+            [candidate for candidate in candidates if candidate and candidate.grouped_id == grouped_id],
+            key=lambda candidate: candidate.id,
+        ) or [message]
 
     async def _is_content_duplicate(
         self,
@@ -136,10 +158,21 @@ class MessageQueueService:
             available += 1
         return available
 
-    async def enqueue(self, rule: ForwardRule, message, processed_text: str, telegram_client) -> Optional[int]:
+    async def enqueue(
+        self,
+        rule: ForwardRule,
+        message,
+        processed_text: str,
+        telegram_client,
+        media_messages: Optional[Iterable] = None,
+    ) -> Optional[int]:
         original_text = getattr(message, "text", None) or getattr(message, "message", None) or ""
         content_hash = self.content_hash(processed_text)
         media_fingerprint = self.media_fingerprint(message)
+        media_messages = list(media_messages or [message])
+        source_message_id = max(
+            int(getattr(media_message, "id", message.id)) for media_message in media_messages
+        )
         target_ids = [target.id for target in rule.delivery_targets if target.is_active and not target.is_deleted]
 
         async with db_manager.async_session() as db:
@@ -149,7 +182,7 @@ class MessageQueueService:
                     QueuedMessage.rule_id == rule.id,
                     QueuedMessage.client_id == rule.client_id,
                     QueuedMessage.source_chat_id == str(rule.source_chat_id),
-                    QueuedMessage.source_message_id == int(message.id),
+                    QueuedMessage.source_message_id == source_message_id,
                 )
                 .options(selectinload(QueuedMessage.delivery_jobs))
             )).scalar_one_or_none()
@@ -162,7 +195,7 @@ class MessageQueueService:
                     rule,
                     content_hash,
                     media_fingerprint,
-                    int(message.id),
+                    source_message_id,
                 ):
                     for job in existing.delivery_jobs:
                         if job.status in {"pending", "retry_wait"}:
@@ -184,8 +217,8 @@ class MessageQueueService:
                 existing.updated_at = get_local_now()
                 if existing.status == "ingest_failed":
                     try:
-                        await get_resource_cache().cache_telegram_media(
-                            db, existing, message, telegram_client
+                        await get_resource_cache().cache_telegram_media_group(
+                            db, existing, media_messages, telegram_client
                         )
                         existing.error_message = None
                     except Exception as exc:
@@ -206,7 +239,7 @@ class MessageQueueService:
                 return existing.id
 
             if await self._is_content_duplicate(
-                db, rule, content_hash, media_fingerprint, int(message.id)
+                db, rule, content_hash, media_fingerprint, source_message_id
             ):
                 return None
 
@@ -221,7 +254,7 @@ class MessageQueueService:
                 client_id=rule.client_id,
                 source_chat_id=str(rule.source_chat_id),
                 source_chat_name=rule.source_chat_name,
-                source_message_id=int(message.id),
+                source_message_id=source_message_id,
                 sender_id=str(getattr(message, "sender_id", "") or "") or None,
                 sender_username=getattr(sender, "username", None),
                 sender_name=sender_name,
@@ -243,8 +276,8 @@ class MessageQueueService:
                 return None
 
             try:
-                await get_resource_cache().cache_telegram_media(
-                    db, queued, message, telegram_client
+                await get_resource_cache().cache_telegram_media_group(
+                    db, queued, media_messages, telegram_client
                 )
                 if queued.delivery_mode == "manual":
                     queued.status = "pending_review"
@@ -296,7 +329,21 @@ class MessageQueueService:
             telegram_message = await wrapper.client.get_messages(chat_id, ids=source_message_id)
             if not telegram_message:
                 raise MessageQueueError("Telegram 源消息不存在或不可访问")
-            result = await self.enqueue(rule, telegram_message, processed_text, wrapper.client)
+            media_messages = await self.media_group(wrapper.client, chat_id, telegram_message)
+            primary = next(
+                (
+                    message for message in media_messages
+                    if getattr(message, "text", None) or getattr(message, "message", None)
+                ),
+                media_messages[0],
+            )
+            result = await self.enqueue(
+                rule,
+                primary,
+                processed_text,
+                wrapper.client,
+                media_messages=media_messages,
+            )
             if result is None:
                 raise MessageQueueError("消息重新摄取失败")
             return result
@@ -352,12 +399,15 @@ class MessageQueueService:
         text: str,
         target_ids: list[int],
         push: bool = False,
+        remove_resource_ids: Optional[list[int]] = None,
+        upload_files: Optional[Iterable] = None,
     ) -> None:
         async with db_manager.async_session() as db:
             message = (await db.execute(
                 select(QueuedMessage)
                 .where(QueuedMessage.id == message_id)
                 .options(
+                    selectinload(QueuedMessage.resources),
                     selectinload(QueuedMessage.delivery_jobs),
                     selectinload(QueuedMessage.rule).selectinload(ForwardRule.delivery_targets),
                 )
@@ -383,6 +433,26 @@ class MessageQueueService:
             if not set(selected).issubset(allowed_ids):
                 raise MessageQueueError("发送目标不属于当前规则或已停用")
 
+            remove_ids = {int(value) for value in (remove_resource_ids or [])}
+            resources_by_id = {resource.id: resource for resource in message.resources}
+            if not remove_ids.issubset(resources_by_id):
+                raise MessageQueueError("待删除资源不属于当前消息")
+            upload_files = list(upload_files or [])
+            retained_resources = [
+                resource for resource in message.resources if resource.id not in remove_ids
+            ]
+            media_count = sum(
+                is_image_or_video(resource.file_name, resource.mime_type)
+                for resource in retained_resources
+            ) + sum(
+                is_image_or_video(
+                    getattr(upload, "filename", ""), getattr(upload, "content_type", None)
+                )
+                for upload in upload_files
+            )
+            if media_count > MAX_MEDIA_ATTACHMENTS:
+                raise MessageQueueError("一条消息最多包含9个图片或视频附件")
+
             for job in message.delivery_jobs:
                 if job.target_id not in selected and job.status in {"pending", "retry_wait"}:
                     job.status = "cancelled"
@@ -405,7 +475,40 @@ class MessageQueueService:
             message.content_hash = self.content_hash(text)
             message.selected_target_ids = json.dumps(selected)
             message.updated_at = get_local_now()
-            await db.commit()
+            cache = get_resource_cache()
+            removed_resources = [resources_by_id[resource_id] for resource_id in remove_ids]
+            uploaded_resources = []
+            try:
+                for resource in removed_resources:
+                    await db.delete(resource)
+                for upload in upload_files:
+                    uploaded_resources.append(
+                        await cache.cache_uploaded_file(db, message, upload)
+                    )
+
+                if remove_ids or uploaded_resources:
+                    final_resources = retained_resources + uploaded_resources
+                    if len(final_resources) > 1:
+                        message.message_type = "album"
+                    elif final_resources:
+                        mime_type = (final_resources[0].mime_type or "").lower()
+                        if mime_type.startswith("image/"):
+                            message.message_type = "photo"
+                        elif mime_type.startswith("video/"):
+                            message.message_type = "video"
+                        else:
+                            message.message_type = "document"
+                    else:
+                        message.message_type = "text"
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                for resource in uploaded_resources:
+                    cache.delete_file(resource)
+                raise
+
+            for resource in removed_resources:
+                cache.delete_file(resource)
 
     async def approve(self, message_id: int, target_ids: Optional[list[int]] = None) -> None:
         async with db_manager.async_session() as db:

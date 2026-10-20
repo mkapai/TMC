@@ -63,7 +63,7 @@ const createApiClient = (): AxiosInstance => {
       console.error('[API] Response error:', error.response?.data || error.message);
       
       // 处理特定HTTP状态码
-      if (error.response?.status === 401) {
+      if (error.response?.status === 401 && error.config?.url !== '/api/auth/login') {
         // 【优化】防止重复处理（多个请求同时返回401时）
         if (!isHandling401) {
           isHandling401 = true;
@@ -110,8 +110,9 @@ export const handleApiResponse = <T>(response: AxiosResponse<T>): T => {
 };
 
 export const handleApiError = (error: unknown): never => {
-  const apiError = error as { response?: { data?: { message?: string } }; message?: string };
-  const message = apiError.response?.data?.message || apiError.message || '请求失败';
+  const apiError = error as { response?: { data?: { message?: string; detail?: unknown } }; message?: string };
+  const detail = apiError.response?.data?.detail;
+  const message = apiError.response?.data?.message || (typeof detail === 'string' ? detail : '') || apiError.message || '请求失败';
   throw new Error(message);
 };
 
@@ -138,6 +139,18 @@ export const api = {
   post: async <T>(url: string, data?: unknown): Promise<T> => {
     try {
       const response = await apiClient.post<T>(url, data);
+      return handleApiResponse(response);
+    } catch (error) {
+      return handleApiError(error);
+    }
+  },
+
+  postForm: async <T>(url: string, data: FormData): Promise<T> => {
+    try {
+      const response = await apiClient.post<T>(url, data, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 300000,
+      });
       return handleApiResponse(response);
     } catch (error) {
       return handleApiError(error);

@@ -4,7 +4,7 @@ from datetime import datetime, time
 from pathlib import Path
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
@@ -14,7 +14,7 @@ from sqlalchemy.orm import joinedload, selectinload
 from database import get_db
 from models import DeliveryJob, ForwardRule, MessageResource, QueuedMessage, get_local_now
 from services.message_queue_service import EDITABLE_STATUSES, MessageQueueError, get_message_queue_service
-from services.resource_cache_service import get_resource_cache
+from services.resource_cache_service import ResourceCacheError, get_resource_cache
 
 router = APIRouter()
 
@@ -49,7 +49,7 @@ def _serialize(message: QueuedMessage, include_detail: bool = False) -> dict:
         "sender_name": message.sender_name,
         "original_text": message.original_text,
         "processed_text": message.processed_text,
-        "message_type": message.message_type,
+        "message_type": "album" if len(message.resources) > 1 else message.message_type,
         "delivery_mode": message.delivery_mode,
         "selected_target_ids": json.loads(message.selected_target_ids or "[]"),
         "available_target_ids": [
@@ -132,8 +132,15 @@ async def list_messages(
         filters.append(QueuedMessage.rule_id == rule_id)
     if source_chat_id:
         filters.append(QueuedMessage.source_chat_id == source_chat_id)
-    if message_type:
+    resource_count = select(func.count(MessageResource.id)).where(
+        MessageResource.message_id == QueuedMessage.id
+    ).correlate(QueuedMessage).scalar_subquery()
+    if message_type == "album":
+        filters.append(resource_count > 1)
+    elif message_type:
         filters.append(QueuedMessage.message_type == message_type)
+        if message_type in {"photo", "video"}:
+            filters.append(resource_count <= 1)
     if start_date:
         filters.append(QueuedMessage.created_at >= start_date)
     if end_date:
@@ -221,7 +228,38 @@ async def update_message(message_id: int, payload: MessageUpdate):
             push=payload.push,
         )
         return {"success": True}
-    except MessageQueueError as exc:
+    except (MessageQueueError, ResourceCacheError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/{message_id}/edit")
+async def edit_message_with_resources(
+    message_id: int,
+    text: str = Form(""),
+    target_ids: str = Form(...),
+    remove_resource_ids: str = Form("[]"),
+    push: bool = Form(False),
+    files: list[UploadFile] = File(default=[]),
+):
+    try:
+        parsed_target_ids = json.loads(target_ids)
+        parsed_remove_ids = json.loads(remove_resource_ids)
+        if not isinstance(parsed_target_ids, list) or not isinstance(parsed_remove_ids, list):
+            raise ValueError
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(400, "资源编辑参数格式无效") from exc
+
+    try:
+        await get_message_queue_service().update_review(
+            message_id,
+            text,
+            parsed_target_ids,
+            push=push,
+            remove_resource_ids=parsed_remove_ids,
+            upload_files=files,
+        )
+        return {"success": True}
+    except (MessageQueueError, ResourceCacheError) as exc:
         raise HTTPException(409, str(exc)) from exc
 
 

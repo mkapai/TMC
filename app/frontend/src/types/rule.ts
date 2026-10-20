@@ -32,7 +32,6 @@ export interface ForwardRule {
   
   // 高级设置
   forward_delay: number;
-  max_message_length: number;
   enable_link_preview: boolean;
   
   // 时间过滤设置
@@ -109,7 +108,6 @@ export interface CreateRuleDto {
   
   // 高级设置
   forward_delay?: number;
-  max_message_length?: number;
   enable_link_preview?: boolean;
   
   // 时间过滤设置

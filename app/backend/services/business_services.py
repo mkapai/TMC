@@ -16,7 +16,7 @@ import time
 from database import get_db
 from models import DeliveryTarget, ForwardRule, Keyword, ReplaceRule, UserSession, BotSettings, rule_delivery_targets
 from filters import KeywordFilter, RegexReplacer, MessageProcessor
-from timezone_utils import get_user_now
+from timezone_utils import get_user_now, rule_time_to_database_time
 
 # 性能优化：缓存装饰器
 def cache_result(ttl: int = 300):
@@ -58,28 +58,15 @@ class ForwardRuleService:
         **kwargs
     ) -> ForwardRule:
         """创建转发规则"""
-        from datetime import datetime
-        import re
-        
         # 处理时间字段转换（与update_rule保持一致）
         for time_field in ['start_time', 'end_time']:
             if time_field in kwargs and kwargs[time_field] is not None:
                 time_value = kwargs[time_field]
-                if isinstance(time_value, str):
-                    try:
-                        # 尝试解析ISO格式的时间字符串
-                        # 支持格式: 2025-09-16T12:00:00 或 2025-09-16T12:00:00.123456
-                        time_value = time_value.replace('Z', '+00:00')  # 处理UTC时间
-                        if '.' in time_value:
-                            # 包含微秒
-                            time_value = re.sub(r'(\.\d{6})\d*', r'\1', time_value)  # 截断到6位微秒
-                            kwargs[time_field] = datetime.fromisoformat(time_value.replace('Z', '+00:00'))
-                        else:
-                            kwargs[time_field] = datetime.fromisoformat(time_value)
-                    except ValueError as e:
-                        logger.warning(f"⚠️ 创建规则时时间字段 {time_field} 格式无效: {time_value}, 错误: {e}")
-                        # 移除无效的时间字段
-                        kwargs.pop(time_field, None)
+                try:
+                    kwargs[time_field] = rule_time_to_database_time(time_value)
+                except ValueError as e:
+                    logger.warning(f"⚠️ 创建规则时时间字段 {time_field} 格式无效: {time_value}, 错误: {e}")
+                    kwargs.pop(time_field, None)
         
         destination_ids = kwargs.pop('destination_ids', [])
         async for db in get_db():
@@ -102,7 +89,7 @@ class ForwardRuleService:
             
             db.add(rule)
             await db.commit()
-            await db.refresh(rule)
+            await db.refresh(rule, attribute_names=["delivery_targets"])
             
             logger.info(f"✅ 创建转发规则成功: {rule.name}, ID: {rule.id}")
             return rule
@@ -174,29 +161,17 @@ class ForwardRuleService:
     async def update_rule(rule_id: int, **kwargs) -> bool:
         """更新规则"""
         from database import db_manager
-        from datetime import datetime
-        import re
         
         try:
             # 处理时间字段转换
             for time_field in ['start_time', 'end_time']:
                 if time_field in kwargs and kwargs[time_field] is not None:
                     time_value = kwargs[time_field]
-                    if isinstance(time_value, str):
-                        try:
-                            # 尝试解析ISO格式的时间字符串
-                            # 支持格式: 2025-09-16T12:00:00 或 2025-09-16T12:00:00.123456
-                            time_value = time_value.replace('Z', '+00:00')  # 处理UTC时间
-                            if '.' in time_value:
-                                # 包含微秒
-                                time_value = re.sub(r'(\.\d{6})\d*', r'\1', time_value)  # 截断到6位微秒
-                                kwargs[time_field] = datetime.fromisoformat(time_value.replace('Z', '+00:00'))
-                            else:
-                                kwargs[time_field] = datetime.fromisoformat(time_value)
-                        except ValueError as e:
-                            logger.warning(f"⚠️ 时间字段 {time_field} 格式无效: {time_value}, 错误: {e}")
-                            # 移除无效的时间字段
-                            kwargs.pop(time_field, None)
+                    try:
+                        kwargs[time_field] = rule_time_to_database_time(time_value)
+                    except ValueError as e:
+                        logger.warning(f"⚠️ 时间字段 {time_field} 格式无效: {time_value}, 错误: {e}")
+                        kwargs.pop(time_field, None)
             
             destination_ids = kwargs.pop('destination_ids', None)
 

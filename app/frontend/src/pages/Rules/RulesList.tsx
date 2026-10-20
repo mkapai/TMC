@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import dayjs from 'dayjs';
 import { 
   Card, 
   Table, 
@@ -282,20 +283,25 @@ const RulesList: React.FC = () => {
       );
     }
 
+    const formatTime = (value: string | undefined, fallback: string) => {
+      const parsed = value ? dayjs(value) : null;
+      return parsed?.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : fallback;
+    };
+
     const getTimeFilterInfo = () => {
       switch (record.time_filter_type) {
         case 'today_only':
           return { text: '仅今日', color: 'blue', icon: <CalendarOutlined /> };
         case 'time_range':
-          const startTime = record.start_time ? record.start_time.substring(0, 5) : '00:00';
-          const endTime = record.end_time ? record.end_time.substring(0, 5) : '23:59';
+          const startTime = formatTime(record.start_time, '未设置');
+          const endTime = formatTime(record.end_time, '未设置');
           return { 
             text: `${startTime}-${endTime}`, 
             color: 'green', 
             icon: <ClockCircleOutlined /> 
           };
         case 'from_time':
-          const fromTime = record.start_time ? record.start_time.substring(0, 5) : '00:00';
+          const fromTime = formatTime(record.start_time, '未设置');
           return { 
             text: `${fromTime}起`, 
             color: 'orange', 

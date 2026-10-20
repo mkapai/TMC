@@ -48,6 +48,9 @@ services:
       
       # 日志级别
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+      # Web 反向代理的可信 IP，用于解析登录限制所需的真实客户端 IP
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-127.0.0.1}
       
     volumes:
       # 重要数据目录（建议使用绝对路径）

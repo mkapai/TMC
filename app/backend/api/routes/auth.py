@@ -2,7 +2,7 @@
 认证相关API路由 - 登录、注册、登出
 """
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +11,7 @@ from typing import Optional
 
 from database import get_db
 from models import User, get_local_now
+from services.login_limiter import login_limiter
 from auth import (
     create_access_token,
     get_password_hash,
@@ -20,6 +21,17 @@ from auth import (
 )
 
 router = APIRouter(prefix="/auth", tags=["认证"])
+
+
+def check_login_limit(ip: str) -> None:
+    retry_after = login_limiter.retry_after(ip)
+    if retry_after:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"登录失败次数过多，IP 已临时封禁，请在 {retry_after} 秒后重试",
+            headers={"Retry-After": str(retry_after)},
+        )
+
 
 # Pydantic 模型
 class UserRegister(BaseModel):
@@ -177,6 +189,9 @@ async def register(
     summary="用户登录",
     description="""
     用户登录获取访问令牌
+
+    同一 IP 在 15 分钟内连续登录失败 5 次，将封禁登录 15 分钟。
+    登录成功清除失败记录；封禁期间返回 429 和 Retry-After（秒）。
     
     **请求参数**:
     - username: 用户名
@@ -210,16 +225,25 @@ async def register(
             }
         },
         401: {"description": "用户名或密码错误"},
-        403: {"description": "用户已被禁用"}
+        403: {"description": "用户已被禁用"},
+        429: {"description": "登录失败过多，IP 已临时封禁"}
     }
 )
-async def login(user_data: UserLogin, db: AsyncSession = Depends(get_db)):
+async def login(user_data: UserLogin, request: Request, db: AsyncSession = Depends(get_db)):
     """用户登录"""
+    # 由 Uvicorn 根据可信代理配置解析客户端 IP，不直接信任请求中的转发头。
+    ip = request.client.host if request.client else "unknown"
+    check_login_limit(ip)
+
     # 查找用户
     result = await db.execute(select(User).where(User.username == user_data.username))
     user = result.scalar_one_or_none()
+    # 数据库查询让出执行权后，再检查是否已被其他并发请求封禁。
+    check_login_limit(ip)
     
     if not user or not verify_password(user_data.password, user.password_hash):
+        login_limiter.record_failure(ip)
+        check_login_limit(ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
@@ -227,11 +251,15 @@ async def login(user_data: UserLogin, db: AsyncSession = Depends(get_db)):
         )
     
     if not user.is_active:
+        login_limiter.record_failure(ip)
+        check_login_limit(ip)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Inactive user"
         )
     
+    login_limiter.reset(ip)
+
     # 更新最后登录时间
     user.last_login = get_local_now()
     await db.commit()
